@@ -1,10 +1,11 @@
 {
   "name": "epub-toolkit",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "JS modules to explore epub files",
-  "main": "index.js",
+  "main": "lib/epub-toolkit.js",
   "scripts": {
-    "build": "webpack"
+    "build": "webpack",
+    "prepublish": "npm run build"
   },
   "keywords": [
     "epub",
