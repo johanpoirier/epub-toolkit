@@ -1,0 +1,30 @@
+{
+  "name": "epub-toolkit",
+  "version": "0.0.2",
+  "description": "JS modules to explore epub files",
+  "main": "index.js",
+  "scripts": {
+    "build": "webpack",
+    "postinstall": "npm run build"
+  },
+  "keywords": [
+    "epub",
+    "js",
+    "module"
+  ],
+  "author": "Johan Poirier <johan.poirier@gmail.com> (https://twitter.com/johanpoirier)",
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.2",
+    "jszip": "^3.1.5",
+    "rsvp": "^4.8.2"
+  },
+  "devDependencies": {
+    "babel-cli": "^6.26.0",
+    "babel-loader": "^7.1.5",
+    "babel-plugin-add-module-exports": "^0.2.1",
+    "babel-preset-env": "^1.7.0",
+    "webpack": "^4.15.1",
+    "webpack-cli": "^3.0.8"
+  }
+}
