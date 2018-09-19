@@ -106,6 +106,16 @@ class Explorer {
   }
 
   /**
+   * Extracts cover image path from epub data
+   *
+   * @param {UInt8Array} epubData
+   * @return {Promise} A promise that resolves with the image path
+   */
+  coverPath(epubData) {
+    return JSZip.loadAsync(epubData).then(getCoverPath);
+  }
+
+  /**
    * Get spines from epub data
    *
    * @param {UInt8Array} epubData
@@ -444,9 +454,13 @@ function getToc(zip) {
 }
 
 function getCoverData(zip) {
-  return getOpfContent(zip)
-    .then(({basePath, opf}) => getCoverFilePath(zip, opf, basePath))
+  return getCoverPath(zip)
     .then(coverFilePath => getFile(zip, coverFilePath, BYTES_FORMAT));
+}
+
+function getCoverPath(zip) {
+  return getOpfContent(zip)
+    .then(({basePath, opf}) => getCoverFilePath(zip, opf, basePath));
 }
 
 function getCoverFilePath(zip, opf, basePath) {
