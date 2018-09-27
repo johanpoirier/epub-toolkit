@@ -1,5 +1,7 @@
 const {all, allSettled, hash, resolve, reject, Promise} = require('rsvp');
 const {isEmpty} = require('./utils');
+const ZipEpub = require('./ZipEpub');
+const WebEpub = require('./WebEpub');
 const Lcp = require('./Lcp');
 const JSZip = require('jszip');
 const cheerio = require('cheerio');
@@ -36,10 +38,25 @@ const PROTECTION_METHOD = {
   UNKNOWN: 'unknown'
 };
 
-const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
 
 class Explorer {
+
+  loadFromBinary(data) {
+    return JSZip
+      .loadAsync(data)
+      .then(zip => new ZipEpub(zip));
+  }
+
+  loadFromBase64(data) {
+    return JSZip
+      .loadAsync(data, {base64: true})
+      .then(zip => new ZipEpub(zip));
+  }
+
+  loadFromWebPubUrl(url) {
+    return resolve(new WebEpub(url));
+  }
 
   /**
    * Analyze and extracts infos from epub
@@ -49,7 +66,7 @@ class Explorer {
    * @return {Promise} A promise that resolves extra data from the epub
    */
   analyze(epubData, userKeys = null) {
-    return JSZip.loadAsync(epubData)
+    return getZipFromData(epubData)
       .then(zip => {
         return allSettled([getMetadata(zip), getToc(zip)])
           .then(([metadataResult, tocResult]) => {
@@ -82,7 +99,7 @@ class Explorer {
    * @return {Promise} A promise that resolves with the metadata
    */
   metadata(epubData) {
-    return JSZip.loadAsync(epubData).then(getMetadata);
+    return getZipFromData(epubData).then(getMetadata);
   }
 
   /**
@@ -92,7 +109,7 @@ class Explorer {
    * @return {Promise} A promise that resolves with the table of content
    */
   toc(epubData) {
-    return JSZip.loadAsync(epubData).then(getToc);
+    return getZipFromData(epubData).then(getToc);
   }
 
   /**
@@ -102,17 +119,7 @@ class Explorer {
    * @return {Promise} A promise that resolves with the image data
    */
   cover(epubData) {
-    return JSZip.loadAsync(epubData).then(getCoverData);
-  }
-
-  /**
-   * Extracts cover image path from epub data
-   *
-   * @param {UInt8Array} epubData
-   * @return {Promise} A promise that resolves with the image path
-   */
-  coverPath(epubData) {
-    return JSZip.loadAsync(epubData).then(getCoverPath);
+    return getZipFromData(epubData).then(getCoverData);
   }
 
   /**
@@ -123,7 +130,7 @@ class Explorer {
    * @return {Promise} A promise that resolves with an array of each spine character count
    */
   spines(epubData, keys = null) {
-    return JSZip.loadAsync(epubData)
+    return getZipFromData(epubData)
       .then(zip => getSpines.call(this, zip, keys));
   }
 
@@ -134,7 +141,7 @@ class Explorer {
    * @return {Promise} A promise that resolves with the parsed LCP license
    */
   lcpLicense(epubData) {
-    return JSZip.loadAsync(epubData)
+    return getZipFromData(epubData)
       .then(getLcpLicense);
   }
 
@@ -144,7 +151,7 @@ class Explorer {
    * @param {UInt8Array} epubData: epub binary data
    */
   protections(epubData) {
-    return JSZip.loadAsync(epubData)
+    return getZipFromData(epubData)
       .then(getProtections);
   }
 
@@ -169,6 +176,15 @@ class Explorer {
 
 module.exports = new Explorer();
 
+const base64regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+
+function getZipFromData(data) {
+  const options = {};
+  if (typeof data === 'string' && base64regex.test(data.slice(0, 64))) {
+    options.base64 = true;
+  }
+  return JSZip.loadAsync(data, options);
+}
 
 function getFile(zip, path, format = STRING_FORMAT) {
   console.log('getting file', path);
@@ -458,130 +474,7 @@ function getCoverData(zip) {
     .then(coverFilePath => getFile(zip, coverFilePath, BYTES_FORMAT));
 }
 
-function getCoverPath(zip) {
-  return getOpfContent(zip)
-    .then(({basePath, opf}) => getCoverFilePath(zip, opf, basePath));
-}
 
-function getCoverFilePath(zip, opf, basePath) {
-  return new Promise((resolve, reject) => {
-    // method 1: search for meta cover
-    getCoverFilePathFromMetaCover(opf, basePath)
-      .then(resolve)
-
-      // method 2: search for an item in manifest with cover-image property
-      .catch(() => getCoverFilePathFromManifestItem(opf, basePath))
-      .then(resolve)
-
-      // method 3 : search for a reference in the guide
-      .catch(() => getCoverFilePathFromGuide(opf, basePath, zip))
-      .then(resolve)
-
-      // method 4 : browse 3 first items of the spine
-      .catch(() => getCoverFilePathFromSpineItems(opf, basePath, zip))
-      .then(resolve)
-
-      .catch(reject);
-  });
-}
-
-function getImagePathFromXhtml(xhtml) {
-  const coverPage = cheerio.load(xhtml);
-
-  const coverImg = coverPage('img');
-  if (!isEmpty(coverImg)) {
-    return coverImg.attr('src');
-  }
-
-  const coverImage = coverPage('image');
-  if (!isEmpty(coverImage)) {
-    return coverImage.attr('href');
-  }
-}
-
-function getCoverFilePathFromMetaCover(opf, basePath) {
-  return new Promise((resolve, reject) => {
-    const coverItemRef = opf('metadata > meta[name="cover"]');
-    if (!coverItemRef) {
-      reject('no cover data found in metadata');
-      return;
-    }
-    const coverItem = opf(`manifest > item[id='${coverItemRef.attr('content')}']`);
-    if (isEmpty(coverItem)) {
-      reject(`no item found in manifest with id ${coverItemRef.attr('content')}`);
-      return;
-    }
-    resolve(basePath + coverItem.attr('href'));
-  });
-}
-
-function getCoverFilePathFromManifestItem(opf, basePath) {
-  return new Promise((resolve, reject) => {
-    const coverItem = opf('manifest > item[properties="cover-image"]');
-    if (isEmpty(coverItem)) {
-      reject('no item with properties "cover-image" found in manifest');
-      return;
-    }
-    resolve(basePath + coverItem.attr('href'));
-  });
-}
-
-function getCoverFilePathFromGuide(opf, basePath, zip) {
-  return new Promise((resolve, reject) => {
-    const coverItem = opf('guide > reference[type="cover"]');
-    if (isEmpty(coverItem)) {
-      reject('no item of type "cover" found in guide');
-      return;
-    }
-
-    const itemBasePath = basePath + getDirPath(coverItem.attr('href'));
-    getFile(zip, basePath + coverItem.attr('href'))
-      .then((coverPageXml) => {
-        const coverPath = getImagePathFromXhtml(coverPageXml);
-        if (coverPath) {
-          resolve(itemBasePath + coverPath);
-        } else {
-          reject('no image url found in xhtml page');
-        }
-      });
-  });
-}
-
-function getCoverFilePathFromSpineItems(opf, basePath, zip) {
-  return new Promise((resolve, reject) => {
-    const spineItems = opf('spine > itemref');
-    if (isEmpty(spineItems)) {
-      reject('no spine items found');
-      return;
-    }
-    const idrefs = spineItems.slice(0, 3).map((index, item) => cheerio(item).attr('idref')).toArray();
-    getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject);
-  });
-}
-
-function getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject) {
-  if (idrefs.length === 0) {
-    reject('no spine item found with cover image inside');
-    return;
-  }
-
-  const id = idrefs.shift();
-  const item = opf(`manifest > item[id="${id}"]`);
-  if (isEmpty(item) || !item.attr('href')) {
-    reject(`no valid manifest item found with id ${id}`);
-    return;
-  }
-
-  const spineItemBasePath = basePath + getDirPath(item.attr('href'));
-  getFile(zip, basePath + item.attr('href')).then((itemXml) => {
-    const coverPath = getImagePathFromXhtml(itemXml);
-    if (coverPath) {
-      resolve(spineItemBasePath + coverPath);
-    } else {
-      getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject);
-    }
-  });
-}
 
 function getProtections(zip) {
   return getFile(zip, 'META-INF/encryption.xml', BYTES_FORMAT)
@@ -617,11 +510,6 @@ function getProtections(zip) {
     // Object.values is not implemented on all recent browsers
     .then(bookResources => Object.keys(bookResources).map(key => bookResources[key]).uniq())
     .catch(() => []);
-}
-
-function getDirPath(fileFullPath) {
-  const dirPath = fileFullPath.split('/').slice(0, -1).join('/');
-  return isEmpty(dirPath) ? '' : `${dirPath}/`;
 }
 
 function normalizePath(path) {
