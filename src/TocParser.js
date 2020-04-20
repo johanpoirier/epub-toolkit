@@ -1,6 +1,6 @@
-const {isEmpty} = require('./utils');
+import {isEmpty} from './utils';
 
-module.exports = function parse(tocDocument) {
+export default function parse(tocDocument) {
   let items;
 
   const navEntryPoint = tocDocument('navMap');

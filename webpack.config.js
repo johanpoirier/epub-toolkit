@@ -1,5 +1,3 @@
-const webpack = require('webpack');
-const path = require('path');
 const libraryName = 'epub-toolkit';
 const outputFile = libraryName + '.js';
 
@@ -20,7 +18,7 @@ const config = {
       {
         test: /\.js$/,
         loader: 'babel-loader',
-        exclude: /node_modules/
+        exclude: /(node_modules|forge\.min\.js)/,
       }
     ]
   },

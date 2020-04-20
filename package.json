@@ -15,16 +15,21 @@
   "author": "Johan Poirier <johan.poirier@gmail.com> (https://twitter.com/johanpoirier)",
   "license": "MIT",
   "dependencies": {
+    "@babel/runtime-corejs3": "^7.9.2",
     "cheerio": "^1.0.0-rc.2",
+    "core-js": "^3.6.5",
     "jszip": "^3.1.5",
     "node-fetch": "^2.2.0",
+    "node-forge": "^0.9.1",
+    "pako": "^1.0.11",
     "rsvp": "^4.8.2"
   },
   "devDependencies": {
-    "babel-cli": "^6.26.0",
-    "babel-loader": "^7.1.5",
-    "babel-plugin-add-module-exports": "^0.2.1",
-    "babel-preset-env": "^1.7.0",
+    "@babel/cli": "^7.8.4",
+    "@babel/core": "^7.9.0",
+    "@babel/plugin-transform-runtime": "^7.9.0",
+    "@babel/preset-env": "^7.9.5",
+    "babel-loader": "^8.1.0",
     "node-fetch": "^2.2.0",
     "webpack": "^4.15.1",
     "webpack-cli": "^3.0.8"

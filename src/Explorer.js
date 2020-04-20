@@ -1,12 +1,12 @@
-const {all, allSettled, hash, resolve, reject, Promise} = require('rsvp');
-const {isEmpty} = require('./utils');
-const ZipEpub = require('./ZipEpub');
-const WebEpub = require('./WebEpub');
-const Lcp = require('./Lcp');
-const JSZip = require('jszip');
-const cheerio = require('cheerio');
+import {all, allSettled, hash, resolve, reject, Promise} from 'rsvp';
+import {isEmpty} from './utils';
+import ZipEpub from './ZipEpub';
+import WebEpub from './WebEpub';
+import Lcp from './Lcp';
+import JSZip from 'jszip';
+import cheerio from 'cheerio';
 
-const parseToc = require('./TocParser');
+import parseToc from './TocParser';
 
 const UTF8 = 'utf-8';
 const UTF16BE = 'utf-16be';
@@ -42,18 +42,30 @@ const TEXT_NODE = 3;
 
 class Explorer {
 
+  /**
+   * @param data
+   * @returns {Promise<ZipEpub>}
+   */
   loadFromBinary(data) {
     return JSZip
       .loadAsync(data)
       .then(zip => new ZipEpub(zip));
   }
 
+  /**
+   * @param data
+   * @returns {Promise<ZipEpub>}
+   */
   loadFromBase64(data) {
     return JSZip
       .loadAsync(data, {base64: true})
       .then(zip => new ZipEpub(zip));
   }
 
+  /**
+   * @param url
+   * @returns {Promise<WebEpub>}
+   */
   loadFromWebPubUrl(url) {
     return resolve(new WebEpub(url));
   }
@@ -68,7 +80,7 @@ class Explorer {
   analyze(epubData, userKeys = null) {
     return getZipFromData(epubData)
       .then(zip => {
-        return allSettled([getMetadata(zip), getToc(zip)])
+        return allSettled([getMetadata(zip), getToc(zip)], 'epub-infos')
           .then(([metadataResult, tocResult]) => {
             const bookExtraData = {};
             if (metadataResult.state === PROMISE_FULFILLED) {
@@ -156,6 +168,16 @@ class Explorer {
   }
 
   /**
+   * Extracts protected file list from epub
+   *
+   * @param {UInt8Array} epubData: epub binary data
+   */
+  protectedFiles(epubData) {
+    return getZipFromData(epubData)
+      .then(getProtectedFiles);
+  }
+
+  /**
    *
    * @param epub
    * @returns {*}
@@ -172,9 +194,40 @@ class Explorer {
   isAscmFile(epubData) {
     return isAscmFile(epubData);
   }
+
+  async decipher(epubData, license, userKey) {
+    const zip = await getZipFromData(epubData);
+    license = license || await getLcpLicense(zip);
+    const protectedFileMap = await getProtectedFiles(zip);
+
+    const promises = Object.keys(zip.files).map(async filePath => {
+      if (protectedFileMap[filePath]) {
+        const data = await getFile(zip, filePath, BYTES_FORMAT);
+        return {
+          path: filePath,
+          data: await Lcp.decipherFile(data, protectedFileMap[filePath], license, userKey)
+        }
+      }
+      return {
+        path: filePath,
+        data: await zip.file(filePath).async(BYTES_FORMAT)
+      };
+    });
+    const epubFiles = await all(promises, 'decipher-files');
+
+    const newZip = new JSZip();
+    await all(epubFiles.map(file => {
+      if (file.path === 'META-INF/encryption.xml') {
+        return;
+      }
+      return newZip.file(file.path, file.data);
+    }), 'add-files-to-zip');
+
+    return newZip.generateAsync({type: 'arraybuffer'});
+  }
 }
 
-module.exports = new Explorer();
+export default new Explorer();
 
 const base64regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
 
@@ -449,11 +502,10 @@ function extractMetadataEntry(entry) {
 function getToc(zip) {
   return getOpfContent(zip)
     .then(({basePath, opf}) => {
-      // let tocItem = opf('item[media-type="application/x-dtbncx+xml"]'); // epub 2
-      // if (isEmpty(tocItem)) {
-      //   tocItem = opf('item[properties="nav"]'); // epub 3
-      // }
-      let tocItem = opf('item[properties="nav"]'); // epub 3
+      let tocItem = opf('item[media-type="application/x-dtbncx+xml"]'); // epub 2
+      if (isEmpty(tocItem)) {
+        tocItem = opf('item[properties="nav"]'); // epub 3
+      }
       if (isEmpty(tocItem)) {
         return null;
       }
@@ -474,42 +526,78 @@ function getCoverData(zip) {
     .then(coverFilePath => getFile(zip, coverFilePath, BYTES_FORMAT));
 }
 
+async function getProtections(zip) {
+  try {
+    const file = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT);
+    const xmlFile = parseXml(file);
 
+    const resourceProtections = {};
+    xmlFile('EncryptedData').each((index, element) => {
+      let resourceProtection = PROTECTION_METHOD.UNKNOWN;
 
-function getProtections(zip) {
-  return getFile(zip, 'META-INF/encryption.xml', BYTES_FORMAT)
-    .catch(() => {
-    })
-    .then(parseXml, error => {
-      if (typeof error === 'string' && !error.match(/not found/)) {
-        console.error(error);
+      const resourceUri = xmlFile('CipherData > CipherReference', element).attr('URI');
+      const encryptionMethod = xmlFile('EncryptionMethod', element);
+      const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
+      const keyResource = xmlFile('KeyInfo > resource', element);
+
+      if (retrievalMethod) {
+        resourceProtection = retrievalMethod.attr('URI');
+      } else if (keyResource) {
+        resourceProtection = keyResource.attr('xmlns');
+      } else {
+        resourceProtection = encryptionMethod.attr('Algorithm');
       }
-      return reject(error);
-    })
-    .then(encryptions => {
-      return Array.from(encryptions.querySelectorAll('EncryptedData')).reduce((resources, data) => {
-        let resourceProtection = PROTECTION_METHOD.UNKNOWN;
+      resourceProtections[resourceProtection] = true;
+    });
+    return Object.keys(resourceProtections);
+  } catch (error) {
+    console.warn(error);
+    return [];
+  }
+}
 
-        const resourceUri = data.querySelector('CipherData > CipherReference').getAttribute('URI');
-        const encryptionMethod = data.querySelector('EncryptionMethod');
-        const retrievalMethod = data.querySelector('KeyInfo > RetrievalMethod');
-        const keyResource = data.querySelector('KeyInfo > resource');
+async function getProtectedFiles(zip) {
+  try {
+    const xmlFile = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT)
+      .then(parseXml)
+      .catch(() => {
+        // no encryption.xml, so no protection
+        return null;
+      });
 
-        if (retrievalMethod) {
-          resourceProtection = retrievalMethod.getAttribute('URI');
-        } else if (keyResource) {
-          resourceProtection = keyResource.getAttribute('xmlns');
-        } else {
-          resourceProtection = encryptionMethod.getAttribute('Algorithm');
-        }
-        resources[resourceUri] = resourceProtection;
+    if (xmlFile === null) {
+      return {};
+    }
 
-        return resources;
-      }, {});
-    })
-    // Object.values is not implemented on all recent browsers
-    .then(bookResources => Object.keys(bookResources).map(key => bookResources[key]).uniq())
-    .catch(() => []);
+    const resources = {};
+    xmlFile('EncryptedData').each((index, element) => {
+      const uri = xmlFile('CipherData > CipherReference', element).attr('URI');
+      const algorithm = xmlFile('EncryptionMethod', element).attr('Algorithm');
+      const compression = xmlFile('Compression', element);
+
+      let type = PROTECTION_METHOD.UNKNOWN;
+      const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
+      if (retrievalMethod.length > 0) {
+        type = retrievalMethod.attr('Type');
+      }
+      const keyInfo = xmlFile('KeyInfo > resource', element);
+      if (keyInfo.length > 0) {
+        type = keyInfo.attr('xmlns');
+      }
+
+      resources[decodeURIComponent(uri)] = {
+        algorithm,
+        compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
+        originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
+        type
+      };
+    });
+
+    return resources;
+  } catch (error) {
+    console.warn(error);
+    throw error;
+  }
 }
 
 function normalizePath(path) {
@@ -527,7 +615,7 @@ function normalizePath(path) {
 
 function parseXml(data) {
   const xmlData = typeof data === 'string' ? data.trim() : bytesToString(data);
-  return resolve(cheerio.load(xmlData, {xmlMode: true}));
+  return cheerio.load(xmlData, {xmlMode: true});
 }
 
 function bytesToString(uint8array) {

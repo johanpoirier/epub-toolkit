@@ -1,6 +1,6 @@
-const cheerio = require('cheerio');
-const {hash, reject} = require('rsvp');
-const {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath} = require('./utils');
+import cheerio from 'cheerio';
+import {hash, reject} from 'rsvp';
+import {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath} from './utils';
 
 class ZipEpub  {
   constructor(zip) {
@@ -16,7 +16,7 @@ class ZipEpub  {
   }
 }
 
-module.exports = ZipEpub;
+export default ZipEpub;
 
 
 const BYTES_FORMAT = 'uint8array';

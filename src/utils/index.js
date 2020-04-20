@@ -12,16 +12,16 @@ const UTF16LE_BOM_MARKER = '255-254';
 const UTF32BE_BOM_MARKER = '0-0-254-255';
 const UTF32LE_BOM_MARKER = '255-254-0-0';
 
-function isEmpty(variable) {
+export function isEmpty(variable) {
   return variable === undefined || variable === null || variable === '' || variable.length === 0;
 }
 
-function parseXml(data) {
+export function parseXml(data) {
   const xmlData = typeof data === 'string' ? data.trim() : bytesToString(data);
   return resolve(cheerio.load(xmlData, {xmlMode: true}));
 }
 
-function bytesToString(uint8array) {
+export function bytesToString(uint8array) {
   const charset = detectCharset(uint8array);
 
   if (typeof TextDecoder === 'undefined') {
@@ -32,7 +32,7 @@ function bytesToString(uint8array) {
   return textDecoder.decode(uint8array);
 }
 
-function detectCharset(uint8array) {
+export function detectCharset(uint8array) {
   const utf16Test = uint8array.subarray(0, 2).join('-');
   if (utf16Test === UTF16LE_BOM_MARKER) {
     return UTF16LE;
@@ -50,7 +50,7 @@ function detectCharset(uint8array) {
   return UTF8;
 }
 
-function normalizePath(path) {
+export function normalizePath(path) {
   const parts = path.split('/');
 
   return parts.reduce((path, part) => {
@@ -63,11 +63,11 @@ function normalizePath(path) {
   });
 }
 
-function getOpfFilePath(document) {
+export function getOpfFilePath(document) {
   return document('rootfile').attr('full-path');
 }
 
-function getBasePath(contentFilePath) {
+export function getBasePath(contentFilePath) {
   const result = contentFilePath.match(/^(\w*)\/\w*\.opf$/);
   if (result) {
     return result[1] + '/';
@@ -75,9 +75,7 @@ function getBasePath(contentFilePath) {
   return '';
 }
 
-function getDirPath(fileFullPath) {
+export function getDirPath(fileFullPath) {
   const dirPath = fileFullPath.split('/').slice(0, -1).join('/');
   return isEmpty(dirPath) ? '' : `${dirPath}/`;
 }
-
-module.exports = {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath};
