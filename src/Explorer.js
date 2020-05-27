@@ -38,6 +38,8 @@ const PROTECTION_METHOD = {
   UNKNOWN: 'unknown'
 };
 
+const LCP_PROTECTION_TYPE = 'http://readium.org/2014/01/lcp#EncryptedContentKey';
+
 const TEXT_NODE = 3;
 
 class Explorer {
@@ -201,11 +203,17 @@ class Explorer {
     const protectedFileMap = await getProtectedFiles(zip);
 
     const promises = Object.keys(zip.files).map(async filePath => {
-      if (protectedFileMap[filePath]) {
-        const data = await getFile(zip, filePath, BYTES_FORMAT);
-        return {
-          path: filePath,
-          data: await Lcp.decipherFile(data, protectedFileMap[filePath], license, userKey)
+      const protection = protectedFileMap[filePath];
+      if (protection && protection.type === LCP_PROTECTION_TYPE) {
+        try {
+          const data = await getFile(zip, filePath, BYTES_FORMAT);
+          return {
+            path: filePath,
+            data: await Lcp.decipherFile(data, protectedFileMap[filePath], license, userKey)
+          }
+        } catch (error) {
+          console.warn(`${filePath} was not deciphered`, error);
+          return null;
         }
       }
       return {
@@ -217,9 +225,13 @@ class Explorer {
 
     const newZip = new JSZip();
     await all(epubFiles.map(file => {
+      if (!file) {
+        return;
+      }
       if (file.path === 'META-INF/encryption.xml') {
         return;
       }
+      console.info('adding to zip', file.path);
       return newZip.file(file.path, file.data);
     }), 'add-files-to-zip');
 
