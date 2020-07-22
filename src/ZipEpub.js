@@ -1,10 +1,13 @@
 import cheerio from 'cheerio';
 import {hash, reject} from 'rsvp';
 import {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath} from './utils';
+import mime from 'mime-types';
 
 class ZipEpub  {
-  constructor(zip) {
+  constructor(zip, license, userKey) {
     this.zip = zip;
+    this.license = license;
+    this.userKey = userKey;
   }
 
   metadata() {
@@ -13,6 +16,24 @@ class ZipEpub  {
 
   coverPath() {
     return getCoverPath(this.zip);
+  }
+
+  protectedFiles() {
+    return getProtectedFiles(this.zip);
+  }
+
+  async getFile(path) {
+    const zipFile = this.zip.file(path);
+    if (!zipFile) {
+      return;
+    }
+
+    const contentType = mime.contentType(path.split('/').pop());
+    const fetchMode = getFetchModeFromMimeType(contentType);
+    return {
+      data: await zipFile.async(fetchMode),
+      contentType
+    };
   }
 }
 
@@ -188,4 +209,61 @@ function getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reje
       getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject);
     }
   });
+}
+
+async function getProtectedFiles(zip) {
+  try {
+    const xmlFile = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT)
+      .then(parseXml)
+      .catch(() => {
+        // no encryption.xml, so no protection
+        return null;
+      });
+
+    if (xmlFile === null) {
+      return {};
+    }
+
+    const resources = {};
+    xmlFile('EncryptedData').each((index, element) => {
+      const uri = xmlFile('CipherData > CipherReference', element).attr('URI');
+      const algorithm = xmlFile('EncryptionMethod', element).attr('Algorithm');
+      const compression = xmlFile('Compression', element);
+
+      let type = PROTECTION_METHOD.UNKNOWN;
+      const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
+      if (retrievalMethod.length > 0) {
+        type = retrievalMethod.attr('Type');
+      }
+      const keyInfo = xmlFile('KeyInfo > resource', element);
+      if (keyInfo.length > 0) {
+        type = keyInfo.attr('xmlns');
+      }
+
+      resources[decodeURIComponent(uri)] = {
+        algorithm,
+        compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
+        originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
+        type
+      };
+    });
+
+    return resources;
+  } catch (error) {
+    console.warn(error);
+    throw error;
+  }
+}
+
+function getFetchModeFromMimeType(mimeType) {
+  if (mimeType.indexOf('image') !== -1) {
+    return 'nodebuffer';
+  }
+  if (mimeType.indexOf('video') !== -1) {
+    return 'nodebuffer';
+  }
+  if (mimeType.indexOf('font') !== -1) {
+    return 'nodebuffer';
+  }
+  return 'text';
 }
