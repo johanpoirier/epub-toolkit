@@ -68,8 +68,8 @@ class Explorer {
    * @param url
    * @returns {Promise<WebEpub>}
    */
-  loadFromWebPubUrl(url) {
-    return resolve(new WebEpub(url));
+  async loadFromWebPubUrl(url) {
+    return new WebEpub(url);
   }
 
   /**
