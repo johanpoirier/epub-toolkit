@@ -7,7 +7,41 @@ const CBC_CHUNK_SIZE = 1024 * 32; // best perf with 32ko chunks
 const ZIP_COMPRESSION_METHOD = 8;
 
 class Lcp {
-  async decipherTextFile() {
+  constructor() {
+    this.contextList = {};
+  }
+
+  /**
+   * Deciphers data and outputs binary data
+   *
+   * @param fetchMode
+   * @param fileData
+   * @param protection
+   * @param license
+   * @param key
+   * @returns {Promise}
+   */
+  async decipherFile(fetchMode, fileData, protection, license, key) {
+    const decipheredRawData = await decipherData.call(this, fileData, license, key);
+
+    if (!isEmpty(protection) && protection['compressionMethod'] === ZIP_COMPRESSION_METHOD) {
+      return fetchMode === 'text' ? unzipToString(decipheredRawData) : unzipToArrayBuffer(decipheredRawData);
+    }
+
+    return fetchMode === 'text' ? arrayBuffer2Binary(decipheredRawData) : decipheredRawData;
+  }
+
+  /**
+   * Deciphers data and outputs binary data
+   *
+   * @param fileData
+   * @param protection
+   * @param license
+   * @param key
+   * @returns {Promise<String>}
+   */
+  async decipherTextFile(fileData, protection, license, key) {
+    return this.decipherFile('text', fileData, protection, license, key);
   }
 
   /**
@@ -19,25 +53,83 @@ class Lcp {
    * @param key
    * @returns {Promise<ArrayBuffer>}
    */
-  async decipherFile(fileData, protection, license, key) {
-    const decipheredData = await decipherData(fileData, license, key);
-    if (!isEmpty(protection) && protection['compressionMethod'] === ZIP_COMPRESSION_METHOD) {
-      return unzipToArrayBuffer(decipheredData);
-    }
-
-    return decipheredData;
+  async decipherBinaryFile(fileData, protection, license, key) {
+    return this.decipherFile('arraybuffer', fileData, protection, license, key);
   }
 
-  getValidUserKey() {
+  /**
+   * Get the first valid user key for given LCP license
+   *
+   * @param {array} keys - the decrypted LCP keys
+   * @param {object} license - the parsed LCP license of epub
+   * @return {Promise} A promise that resolves with a valid user key if any
+   */
+  async getValidUserKey(license, keys) {
+    if (isEmpty(license) || isEmpty(keys)) {
+      return;
+    }
+
+    const validKeys = [];
+    for (const key of keys) {
+      const valid = await this.checkValidity(key, license);
+      if (valid) {
+        validKeys.push(key);
+      }
+    }
+    return validKeys.pop();
+  }
+
+  /**
+   * Test user key against epub LCP license
+   *
+   * @param {string} userKey
+   * @param {object} license
+   * @return {Promise} A promise that resolves with the user key, rejects if not valid
+   */
+  async checkValidity(userKey, license) {
+    const userKeyCheck = license.encryption.user_key.key_check;
+
+    // Decrypt and compare it to license ID
+    try {
+      const userKeyCheckDecrypted = await decipher(forge.util.hexToBytes(userKey), forge.util.decode64(userKeyCheck));
+      return license.id === userKeyCheckDecrypted;
+    } catch (error) {
+      console.warn(error);
+      return false;
+    }
   }
 }
 
 export default new Lcp();
 
+/**
+ * Creates or returns a LCP context for file data decipher
+ *
+ * @param license {String}: the json string of the license
+ * @param key {String}: a valid user key
+ * @returns {Promise<Object>}
+ */
+async function getContext(license, key) {
+  let context = this.contextList[`${license.id}:${key}`];
+  if (context) {
+    return context;
+  }
+
+  context = await createContext(license, key);
+  this.contextList[`${license['id']}:${key}`] = context;
+
+  return context;
+}
+
+async function createContext(license, userKey) {
+  return {
+    contentKey: await getContentKey(license, userKey)
+  };
+}
 
 async function decipherData(fileData, license, userKey) {
-  const contentKey = await getContentKey(license, userKey);
-  return decipher(contentKey, fileData, 'arraybuffer');
+  const context = await getContext.call(this, license, userKey);
+  return decipher(context.contentKey, fileData, 'arraybuffer');
 }
 
 function decipher(key, encryptedData, dataType) {
@@ -62,21 +154,22 @@ function aesDecipherArrayBuffer(key, encryptedArrayBuffer) {
     decipher.start({iv: forge.util.createBuffer(encryptedArrayBuffer.slice(0, IV_BYTES_SIZE)).data});
 
     const length = encryptedArrayBuffer.length || encryptedArrayBuffer.byteLength;
-    const chunkSize = CBC_CHUNK_SIZE;
+
     let index = IV_BYTES_SIZE;
     let realSize = 0;
 
-    const decryptedBuffer = new Uint8Array(length - IV_BYTES_SIZE);
+    const decryptedBuffer = new Uint8Array(length);
     do {
       const bytes = decipher.output.getBytes();
       if (bytes.length > 0) {
-        decryptedBuffer.set(binary2BinArray(bytes), index - CBC_CHUNK_SIZE - IV_BYTES_SIZE);
+        const binArray = binary2BinArray(bytes);
+        decryptedBuffer.set(binArray, index - CBC_CHUNK_SIZE - IV_BYTES_SIZE);
         realSize += bytes.length;
       }
 
-      const buf = forge.util.createBuffer(encryptedArrayBuffer.slice(index, index + chunkSize));
+      const buf = forge.util.createBuffer(encryptedArrayBuffer.slice(index, index + CBC_CHUNK_SIZE));
       decipher.update(buf);
-      index += chunkSize;
+      index += CBC_CHUNK_SIZE;
     } while (index < length);
 
     decipher.finish();
@@ -87,7 +180,7 @@ function aesDecipherArrayBuffer(key, encryptedArrayBuffer) {
 
     return decryptedBuffer.slice(0, realSize);
   } catch (e) {
-    throw new Error('Key is invalid: ' + e.message);
+    throw new Error('Decipher failed: ' + e.message);
   }
 }
 
@@ -136,10 +229,29 @@ function binary2BinArray(binary) {
   return uint8Array;
 }
 
+function arrayBuffer2Binary(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const length = bytes.byteLength;
+  for (let i = 0; i < length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return binary;
+}
+
 /**
  * @param data ArrayBuffer
  * @returns {ArrayBuffer}
  */
 function unzipToArrayBuffer(data) {
   return pako.inflateRaw(data, {to: 'array'});
+}
+
+/**
+ *
+ * @param data ArrayBuffer
+ * @returns {String}
+ */
+function unzipToString(data) {
+  return pako.inflateRaw(data, {to: 'string'});
 }

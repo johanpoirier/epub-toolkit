@@ -1,4 +1,4 @@
-import {all, allSettled, hash, resolve, reject, Promise} from 'rsvp';
+import {all, allSettled, hash, reject, Promise} from 'rsvp';
 import {isEmpty} from './utils';
 import ZipEpub from './ZipEpub';
 import WebEpub from './WebEpub';
@@ -46,12 +46,14 @@ class Explorer {
 
   /**
    * @param data
+   * @param license
+   * @param userKey
    * @returns {Promise<ZipEpub>}
    */
-  loadFromBinary(data) {
+  loadFromBinary(data, license = null, userKey = null) {
     return JSZip
       .loadAsync(data)
-      .then(zip => new ZipEpub(zip));
+      .then(zip => new ZipEpub(zip, license, userKey));
   }
 
   /**
@@ -547,7 +549,6 @@ async function getProtections(zip) {
     xmlFile('EncryptedData').each((index, element) => {
       let resourceProtection = PROTECTION_METHOD.UNKNOWN;
 
-      const resourceUri = xmlFile('CipherData > CipherReference', element).attr('URI');
       const encryptionMethod = xmlFile('EncryptionMethod', element);
       const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
       const keyResource = xmlFile('KeyInfo > resource', element);

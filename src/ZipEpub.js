@@ -1,25 +1,50 @@
 import cheerio from 'cheerio';
-import {hash, reject} from 'rsvp';
+import {hash} from 'rsvp';
+import Lcp from './Lcp';
 import {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath} from './utils';
 import mime from 'mime-types';
+const forge = require('../vendor/forge.min');
 
 class ZipEpub  {
   constructor(zip, license, userKey) {
     this.zip = zip;
     this.license = license;
     this.userKey = userKey;
+
+    this.uid = null;
+    this.metadata = null;
+    this.protectedFiles = null;
   }
 
-  metadata() {
-    return getMetadata(this.zip);
+  async getMetadata() {
+    if (!this.metadata) {
+      this.metadata = await getMetadata(this.zip);
+    }
+    return this.metadata;
   }
 
-  coverPath() {
+  getCoverPath() {
     return getCoverPath(this.zip);
   }
 
-  protectedFiles() {
-    return getProtectedFiles(this.zip);
+  async getProtectedFiles() {
+    if (!this.protectedFiles) {
+      this.protectedFiles = await getProtectedFiles(this.zip);
+    }
+    return this.protectedFiles;
+  }
+
+  async getUid() {
+    if (this.uid === null) {
+      const metadata = await getMetadata(this.zip);
+      this.uid = metadata['dc:identifier'] || 0;
+    }
+    return this.uid;
+  }
+
+  async getFileProtection(path) {
+    const protections = await getProtectedFiles(this.zip);
+    return protections[path];
   }
 
   async getFile(path) {
@@ -29,9 +54,9 @@ class ZipEpub  {
     }
 
     const contentType = mime.contentType(path.split('/').pop());
-    const fetchMode = getFetchModeFromMimeType(contentType);
+
     return {
-      data: await zipFile.async(fetchMode),
+      data: await getZipFileData(zipFile, contentType, await this.getFileProtection(path), this.license, this.userKey, await this.getUid()),
       contentType
     };
   }
@@ -43,11 +68,39 @@ export default ZipEpub;
 const BYTES_FORMAT = 'uint8array';
 const STRING_FORMAT = 'string';
 
-function getFile(zip, path, format = STRING_FORMAT) {
-  console.log('getting file', path);
+const ENCRYPTION_METHODS = {
+  IDPF: 'http://www.idpf.org/2008/embedding',
+  ADOBE: 'http://ns.adobe.com/pdf/enc#RC',
+  LCP: 'http://www.w3.org/2001/04/xmlenc#aes256-cbc'
+};
+
+async function getZipFileData(zipFile, contentType, protection, license, userKey, uid) {
+  const fetchMode = getFetchModeFromMimeType(contentType);
+  if (!protection) {
+    return zipFile.async(fetchMode);
+  }
+  switch (protection.algorithm) {
+    case ENCRYPTION_METHODS.LCP:
+      const decodedData = await Lcp.decipherFile(fetchMode, await zipFile.async('arraybuffer'), protection, license, userKey);
+      if (fetchMode === 'text') {
+        return fixDecodedTextData(decodedData, contentType);
+      }
+      return decodedData;
+
+    case ENCRYPTION_METHODS.IDPF:
+      // not implemented yet
+      return zipFile.async(fetchMode);
+
+    case ENCRYPTION_METHODS.ADOBE:
+      // not implemented yet
+      return zipFile.async(fetchMode);
+  }
+}
+
+async function getFile(zip, path, format = STRING_FORMAT) {
   const zipFile = zip.file(normalizePath(path));
   if (!zipFile) {
-    return reject(`file ${path} not found in zip`);
+    throw new Error(`file ${path} not found in zip`);
   }
 
   return zipFile.async(format);
@@ -68,7 +121,7 @@ function getOpfContent(zip) {
       return hash({
         basePath: basePath,
         opf: parseXml(opfXml.trim())
-      });
+      }, 'opf-data');
     });
 }
 
@@ -77,9 +130,13 @@ function getMetadata(zip) {
     .then(({opf}) => {
       const fixedMetadata = {};
       const metadata = opf('metadata > *');
+      const uniqueIdentifier = opf('package').attr('unique-identifier');
 
       metadata.each((index, entry) => {
         const data = extractMetadataEntry(entry);
+        if (fixedMetadata[data.key] && data.key === 'dc:identifier' && entry.attribs['id'] !== uniqueIdentifier) {
+          return;
+        }
         fixedMetadata[data.key] = data.value;
       });
       return fixedMetadata;
@@ -230,7 +287,7 @@ async function getProtectedFiles(zip) {
       const algorithm = xmlFile('EncryptionMethod', element).attr('Algorithm');
       const compression = xmlFile('Compression', element);
 
-      let type = PROTECTION_METHOD.UNKNOWN;
+      let type = null;
       const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
       if (retrievalMethod.length > 0) {
         type = retrievalMethod.attr('Type');
@@ -266,4 +323,55 @@ function getFetchModeFromMimeType(mimeType) {
     return 'nodebuffer';
   }
   return 'text';
+}
+
+function fixDecodedTextData(decryptedBinaryData, mimeType) {
+  if (typeof decryptedBinaryData !== 'string') {
+    return decryptedBinaryData;
+  }
+
+  // BOM removal
+  if (decryptedBinaryData.charCodeAt(0) === 0xFEFF) {
+    decryptedBinaryData = decryptedBinaryData.substr(1);
+  }
+  let data = decryptedBinaryData.replace(/^ï»¿/, '');
+
+  // convert UTF-8 decoded data to UTF-16 javascript string
+  if (/html/.test(mimeType)) {
+    try {
+      data = forge.util.decodeUtf8(data);
+
+      // trimming bad data at the end the spine
+      var lastClosingTagIndex = data.lastIndexOf('>');
+      if (lastClosingTagIndex > 0) {
+        data = data.substring(0, lastClosingTagIndex + 1);
+      }
+    } catch (err) {
+      console.warn('Can’t decode utf8 content', err);
+    }
+  }
+  return data;
+}
+
+function extractMetadataEntry(entry) {
+  const element = cheerio(entry);
+  const tagName = entry.tagName;
+
+  let key, value;
+
+  if (tagName === 'meta') {
+    key = element.attr('property');
+
+    if (key) {
+      value = element.text();
+    } else {
+      key = element.attr('name');
+      value = element.attr('content');
+    }
+  } else {
+    key = tagName;
+    value = element.text();
+  }
+
+  return {key, value};
 }
