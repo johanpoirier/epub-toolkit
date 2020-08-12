@@ -1,12 +1,14 @@
 import {all, allSettled, hash, reject, Promise} from 'rsvp';
-import {isEmpty} from './utils';
+import {convertUtf16Data, isEmpty} from './utils';
 import ZipEpub from './ZipEpub';
 import WebEpub from './WebEpub';
-import Lcp from './Lcp';
+import Lcp, {PROTECTION_METHODS} from './Lcp';
 import JSZip from 'jszip';
 import cheerio from 'cheerio';
 
+import EpubCFI from './cfi/epubcfi';
 import parseToc from './TocParser';
+import {FileNotFoundError} from './errors';
 
 const UTF8 = 'utf-8';
 const UTF16BE = 'utf-16be';
@@ -81,7 +83,7 @@ class Explorer {
    * @param userKeys: user LCP keys
    * @return {Promise} A promise that resolves extra data from the epub
    */
-  analyze(epubData, userKeys = null) {
+  analyze(epubData, license, userKeys = null) {
     return getZipFromData(epubData)
       .then(zip => {
         return allSettled([getMetadata(zip), getToc(zip)], 'epub-infos')
@@ -96,7 +98,7 @@ class Explorer {
             return bookExtraData;
           })
           .then(data => {
-            return getSpines.call(this, zip, userKeys, data.toc)
+            return getSpines.call(this, zip, license, userKeys, data.toc)
               .then(spines => data.spines = spines)
               .then(() => computeTocItemsSizes(data.toc))
               .then(() => generatePagination(data.toc, data.spines))
@@ -257,32 +259,44 @@ function getFile(zip, path, format = STRING_FORMAT) {
   console.log('getting file', path);
   const zipFile = zip.file(normalizePath(path));
   if (!zipFile) {
-    return reject(`file ${path} not found in zip`);
+    throw new FileNotFoundError(`file ${path} not found in zip`);
   }
 
   return zipFile.async(format);
 }
 
-function getFileContent(zip, path, license, key) {
-  const format = license ? ARRAYBUFFER_FORMAT : STRING_FORMAT;
-  return getFile(zip, path, format)
-    .then(fileContent => {
-      if (license) {
-        return Lcp.decipherTextFile(fileContent, license, key)
-          .catch(error => {
-            console.warn(`Can’t extract content of file at ${path}`, error);
-            return '';
-          });
-      }
+async function getFileContent(zip, path, protection, license, key) {
+  try {
+    const format = isEmpty(protection) ? STRING_FORMAT : ARRAYBUFFER_FORMAT;
+    let fileContent = await getFile(zip, path, format);
+
+    if (isEmpty(protection)) {
       return fileContent;
-    });
+    }
+
+    if (protection.type === PROTECTION_METHODS.LCP) {
+      fileContent = await Lcp.decipherTextFile(fileContent, protection, license, key);
+
+      if (/html/.test(path)) {
+        fileContent = convertUtf16Data(fileContent);
+      }
+    }
+
+    return fileContent;
+
+  } catch (error) {
+    console.warn(`Can’t extract content of file at ${path}`, error);
+    return '';
+  }
 }
 
-function getLcpLicense(zip) {
-  return getFile(zip, 'META-INF/license.lcpl')
-    .then(licenseJson => {
-      return JSON.parse(licenseJson);
-    });
+async function getLcpLicense(zip) {
+  try {
+    const licenseJson = await getFile(zip, 'META-INF/license.lcpl');
+    return JSON.parse(licenseJson);
+  } catch {
+    return null;
+  }
 }
 
 function getOpfContent(zip) {
@@ -312,80 +326,68 @@ function getBasePath(contentFilePath) {
   return '';
 }
 
-function getSpines(zip, keys = null, toc = null) {
-  // if book is protected by CARE, we have to decipher its content
-  let license = null;
-  let userKey = null;
+async function getSpines(zip, license, keys = null, toc = null, shouldAnalyzeSpines = true) {
+  if (isEmpty(license)) {
+    license = await getLcpLicense(zip);
+  }
 
-  return getLcpLicense(zip)
-    .then(lcpLicense => {
-      license = lcpLicense;
-      return Lcp.getValidUserKey(keys, lcpLicense)
-        .then(key => (userKey = key))
-        .catch(console.warn);
-    }, () => { /* book is not protected by CARE */
-    })
+  // finding spines in .opf
+  const {basePath, opf} = await getOpfContent(zip);
+  const validSpines = [];
+  opf('spine > itemref').each((index, element) => {
+    const spine = cheerio(element);
+    const idref = spine.attr('idref');
+    const item = opf(`manifest > item[id="${idref}"]`);
+    if (isEmpty(item)) {
+      return;
+    }
+    const href = item.attr('href');
+    const validSpine = {
+      idref,
+      href,
+      path: basePath + href
+    };
 
-    // finding spines in .opf
-    .then(() => getOpfContent(zip))
-    .then(({basePath, opf}) => {
-      const validSpines = [];
-      opf('spine > itemref').each((index, element) => {
-        const spine = cheerio(element);
-        const idref = spine.attr('idref');
-        const item = opf(`manifest > item[id="${idref}"]`);
-        if (isEmpty(item)) {
-          return;
-        }
-        const href = item.attr('href');
-        const validSpine = {
-          idref,
-          href,
-          path: basePath + href
-        };
+    const spineProperties = spine.attr('properties');
+    if (!isEmpty(spineProperties)) {
+      validSpine.spread = spineProperties;
+    }
 
-        const spineProperties = spine.attr('properties');
-        if (!isEmpty(spineProperties)) {
-          validSpine.spread = spineProperties;
-        }
+    validSpines.push(validSpine);
+  });
 
-        validSpines.push(validSpine);
-      });
+  const protectedFiles = await getProtectedFiles(zip);
+  for (let spineIndex = 0; spineIndex < validSpines.length; spineIndex++) {
+    const spine = validSpines[spineIndex];
+    spine.cfi = `/6/${2 + spineIndex * 2}`;
+    spine.protection = protectedFiles[spine.path];
+  }
 
-      return validSpines;
-    })
+  if (shouldAnalyzeSpines) {
+    const userKey = await Lcp.getValidUserKey(license, keys);
+    const promises = [];
+    validSpines.forEach(spine => promises.push(analyzeSpine.call(this, zip, spine, license, userKey, toc)));
+    return all(promises, 'spines analysis');
+  }
 
-    // compute each spine CFI
-    .then(spines => {
-      for (let spineIndex = 0; spineIndex < spines.length; spineIndex++) {
-        spines[spineIndex].cfi = `/4/${2 + spineIndex * 2}`;
-      }
-      return spines;
-    })
-
-    // getting each file elements count
-    .then(spines => {
-      const promises = [];
-      spines.forEach(spine => promises.push(analyzeSpine.call(this, zip, spine, license, userKey, toc)));
-      return all(promises);
-    });
+  return validSpines;
 }
 
 function analyzeSpine(zip, spine, license, userKey, toc) {
-  return getFileContent.call(this, zip, spine.path, license, userKey)
+  return getFileContent.call(this, zip, spine.path, spine.protection, license, userKey)
     .then(parseXml)
     .then(domContent => getSpineElementsCountInDom(domContent)
       .then(elementsCount => Object.assign(spine, elementsCount))
       .then(spine => enrichTocItems(toc, spine, domContent))
     )
-    .catch(() => {
-      console.warn(`Can’t analyze spine ${spine.path}`);
+    .catch(error => {
+      console.warn(`Can’t analyze spine ${spine.path}`, error);
       return Object.assign(spine, EMPTY_ELEMENTS_COUNT);
     });
 }
 
 function getSpineElementsCountInDom(domContent) {
-  return all([getCharacterCountInDom(domContent), getImageCountInDom(domContent), getVideoCountInDom(domContent)])
+  return all([getCharacterCountInDom(domContent), getImageCountInDom(domContent), getVideoCountInDom(domContent)], 'spine analysis')
     .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
     .then(estimateTotalCount)
     .catch(error => {
@@ -395,7 +397,7 @@ function getSpineElementsCountInDom(domContent) {
 }
 
 function getElementsCount(elements) {
-  return all([getCharacterCount(elements), getImageCount(elements), getVideoCount(elements)])
+  return all([getCharacterCount(elements), getImageCount(elements), getVideoCount(elements)], 'elements count')
     .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
     .then(estimateTotalCount)
     .catch(error => {
@@ -468,8 +470,15 @@ function findTocItemsInSpine(items, href) {
   return matchingItems;
 }
 
-function computeCfi() {
-  return 'epubcfi';
+function computeCfi(baseCfi, spineContent, hash) {
+  if (hash) {
+    const hashElement = spineContent(`#${hash}`);
+    if (hashElement.length > 0) {
+      return new EpubCFI(hashElement[0], baseCfi).toString();
+    }
+  }
+
+  return `epubcfi(${baseCfi}!/4)`;
 }
 
 function getOpfFilePath(document) {
@@ -570,18 +579,15 @@ async function getProtections(zip) {
 }
 
 async function getProtectedFiles(zip) {
+  let xmlFile;
   try {
-    const xmlFile = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT)
-      .then(parseXml)
-      .catch(() => {
-        // no encryption.xml, so no protection
-        return null;
-      });
+    xmlFile = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT);
+  } catch (error) {
+    return {};
+  }
 
-    if (xmlFile === null) {
-      return {};
-    }
-
+  try {
+    xmlFile = parseXml(xmlFile);
     const resources = {};
     xmlFile('EncryptedData').each((index, element) => {
       const uri = xmlFile('CipherData > CipherReference', element).attr('URI');

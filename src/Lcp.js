@@ -6,6 +6,14 @@ const IV_BYTES_SIZE = 16;
 const CBC_CHUNK_SIZE = 1024 * 32; // best perf with 32ko chunks
 const ZIP_COMPRESSION_METHOD = 8;
 
+export const PROTECTION_METHODS = {
+  ADOBE_DRM: 'http://ns.adobe.com/adept',
+  ADOBE_FONT: 'http://ns.adobe.com/pdf/enc#RC',
+  LCP: 'http://readium.org/2014/01/lcp#EncryptedContentKey',
+  IDPF_FONT: 'http://www.idpf.org/2008/embedding',
+  UNKNOWN: 'unknown'
+};
+
 class Lcp {
   constructor() {
     this.contextList = {};

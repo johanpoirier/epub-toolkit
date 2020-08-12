@@ -79,3 +79,20 @@ export function getDirPath(fileFullPath) {
   const dirPath = fileFullPath.split('/').slice(0, -1).join('/');
   return isEmpty(dirPath) ? '' : `${dirPath}/`;
 }
+
+export function convertUtf16Data(data) {
+  // BOM removal
+  if (data.charCodeAt(0) === 0xFEFF) {
+    data = data.substr(1);
+  }
+  data = data.replace(/^ï»¿/, '');
+
+  // convert UTF-8 decoded data to UTF-16 javascript string
+  try {
+    data = forge.util.decodeUtf8(data);
+  } catch (err) {
+    console.warn('Can’t decode utf8 content', err);
+  }
+
+  return data;
+}
