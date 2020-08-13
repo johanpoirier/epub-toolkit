@@ -522,26 +522,28 @@ function extractMetadataEntry(entry) {
   return {key, value};
 }
 
-function getToc(zip) {
-  return getOpfContent(zip)
-    .then(({basePath, opf}) => {
-      let tocItem = opf('item[media-type="application/x-dtbncx+xml"]'); // epub 2
-      if (isEmpty(tocItem)) {
-        tocItem = opf('item[properties="nav"]'); // epub 3
-      }
-      if (isEmpty(tocItem)) {
-        return null;
-      }
+async function getToc(zip) {
+  try {
+    const {basePath, opf} = await getOpfContent(zip);
 
-      const tocFilename = tocItem.attr('href');
-      return getFile(zip, basePath + tocFilename);
-    })
-    .then(parseXml)
-    .then(parseToc)
-    .catch(error => {
-      console.warn('failed to parse toc file', error);
+    let tocElement = opf('item[media-type="application/x-dtbncx+xml"]'); // epub 2
+    if (isEmpty(tocElement)) {
+      tocElement = opf('item[properties="nav"]'); // epub 3
+    }
+    if (isEmpty(tocElement)) {
       return null;
-    });
+    }
+
+    const tocFilename = tocElement.attr('href');
+    const tocFile = await getFile(zip, basePath + tocFilename);
+    const tocItems = parseToc(parseXml(tocFile));
+
+    tocItems.forEach(item => item.path = `/${basePath}${item.href}`);
+    return tocItems;
+  } catch (error) {
+    console.warn('failed to parse toc file', error);
+    return null;
+  }
 }
 
 function getCoverData(zip) {
