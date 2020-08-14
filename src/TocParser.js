@@ -1,15 +1,15 @@
 import {isEmpty} from './utils';
 
-export default function parse(tocDocument) {
+export default function parse(basePath, tocDocument) {
   let items;
 
   const navEntryPoint = tocDocument('navMap');
   if (isEmpty(navEntryPoint)) {
     // ePub 3
-    items = parseNavItem(tocDocument('nav[epub\\:type="toc"] > ol > li').first(), 'li', []);
+    items = parseNavItem(basePath, tocDocument('nav[epub\\:type="toc"] > ol > li').first(), 'li', []);
   } else {
     // ePub 2
-    items = parseNavItem(tocDocument('navMap > navPoint').first(), 'navPoint', []);
+    items = parseNavItem(basePath, tocDocument('navMap > navPoint').first(), 'navPoint', []);
   }
 
   setPositions(items, 1, 0);
@@ -17,7 +17,7 @@ export default function parse(tocDocument) {
   return items;
 };
 
-function parseNavItem(item, tagName, items, parent) {
+function parseNavItem(basePath, item, tagName, items, parent) {
   let tocItem;
   const childNodes = item.children();
   if (!isEmpty(childNodes)) {
@@ -26,11 +26,12 @@ function parseNavItem(item, tagName, items, parent) {
     } else {
       tocItem = extractNavPointInfos(item, parent);
     }
+    tocItem.path = `/${basePath}${tocItem.href}`;
 
     // parsing first child and its siblings
     const childItems = item.children(tagName);
     if (!isEmpty(childItems)) {
-      tocItem.items = parseNavItem(childItems.first(), tagName, [], tocItem);
+      tocItem.items = parseNavItem(basePath, childItems.first(), tagName, [], tocItem);
     }
 
     tocItem.endPoint = (!tocItem.items || tocItem.items.length === 0);
@@ -41,7 +42,7 @@ function parseNavItem(item, tagName, items, parent) {
   // next nav item
   const nextItem = item.next();
   if (!isEmpty(nextItem)) {
-    parseNavItem(nextItem, tagName, items, parent);
+    parseNavItem(basePath, nextItem, tagName, items, parent);
   }
 
   return items;

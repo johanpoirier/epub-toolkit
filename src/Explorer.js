@@ -536,10 +536,7 @@ async function getToc(zip) {
 
     const tocFilename = tocElement.attr('href');
     const tocFile = await getFile(zip, basePath + tocFilename);
-    const tocItems = parseToc(parseXml(tocFile));
-
-    tocItems.forEach(item => item.path = `/${basePath}${item.href}`);
-    return tocItems;
+    return parseToc(basePath, parseXml(tocFile));
   } catch (error) {
     console.warn('failed to parse toc file', error);
     return null;
