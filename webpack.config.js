@@ -18,7 +18,7 @@ const config = {
       {
         test: /\.js$/,
         loader: 'babel-loader',
-        exclude: /(node_modules|forge\.min\.js)/,
+        exclude: /(node_modules|forge\.toolkit\.js)/,
       }
     ]
   },

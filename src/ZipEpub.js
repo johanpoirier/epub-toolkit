@@ -3,7 +3,7 @@ import {hash} from 'rsvp';
 import Lcp from './Lcp';
 import {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath} from './utils';
 import mime from 'mime-types';
-const forge = require('../vendor/forge.min');
+const forge = require('../vendor/forge.toolkit');
 
 class ZipEpub  {
   constructor(zip, license, userKey) {
