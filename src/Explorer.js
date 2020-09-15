@@ -345,7 +345,7 @@ async function getSpines(zip, license, keys = null, toc = null, shouldAnalyzeSpi
     const validSpine = {
       idref,
       href,
-      path: basePath + href
+      path: `/${basePath}${href}`
     };
 
     const spineProperties = spine.attr('properties');
