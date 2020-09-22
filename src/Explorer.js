@@ -1,4 +1,4 @@
-import {all, allSettled, hash, reject, Promise} from 'rsvp';
+import {all, allSettled, hash, Promise} from 'rsvp';
 import {convertUtf16Data, isEmpty} from './utils';
 import ZipEpub from './ZipEpub';
 import WebEpub from './WebEpub';

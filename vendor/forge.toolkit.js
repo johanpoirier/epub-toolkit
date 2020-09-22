@@ -206,7 +206,7 @@ var util = module.exports = forge.util = forge.util || {};
 
 // check if running under Node.js
 util.isNodejs =
-  typeof process !== 'undefined' && process.versions && process.versions.node;
+  typeof global !== 'undefined' && typeof global.process !== 'undefined' && global.process.versions && global.process.versions.node;
 
 
 // 'self' will also work in Web Workers (instance of WorkerGlobalScope) while

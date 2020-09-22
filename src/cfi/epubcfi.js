@@ -400,7 +400,7 @@ class EpubCFI {
     var nodeType = (node.nodeType === TEXT_NODE) ? "text" : "element";
 
     return {
-      "id": node.id,
+      "id": node.id || node.attribs.id,
       "tagName": node.tagName,
       "type": nodeType,
       "index": this.position(node)
@@ -719,10 +719,7 @@ class EpubCFI {
   position(anchor) {
     var children, index;
     if (anchor.nodeType === ELEMENT_NODE) {
-      children = anchor.parentNode.children;
-      if (!children) {
-        children = findChildren(anchor.parentNode);
-      }
+      children = findChildren(anchor.parentNode);
       index = Array.prototype.indexOf.call(children, anchor);
     } else {
       children = this.textNodes(anchor.parentNode);
