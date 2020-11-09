@@ -96,3 +96,8 @@ export function convertUtf16Data(data) {
 
   return data;
 }
+
+export function isEpubFixedLayout(meta) {
+    const formatData = meta.find(m => m && m['_property'] === 'rendition:layout');
+    return !!(formatData && (formatData['__text'] === 'pre-paginated'));
+}

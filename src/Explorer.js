@@ -1,5 +1,5 @@
-import {all, allSettled, hash, Promise} from 'rsvp';
-import {convertUtf16Data, isEmpty} from './utils';
+import {all, hash, Promise} from 'rsvp';
+import {convertUtf16Data, isEpubFixedLayout, isEmpty} from './utils';
 import ZipEpub from './ZipEpub';
 import WebEpub from './WebEpub';
 import Lcp, {PROTECTION_METHODS} from './Lcp';
@@ -24,8 +24,6 @@ const UTF32LE_BOM_MARKER = '255-254-0-0';
 const BYTES_FORMAT = 'uint8array';
 const STRING_FORMAT = 'string';
 const ARRAYBUFFER_FORMAT = 'arraybuffer';
-
-const PROMISE_FULFILLED = 'fulfilled';
 
 const EPUB_FILE_MIME_TYPE = 'application/epub+zip';
 const ASCM_XML_ROOT_TAG = 'fulfillmentToken';
@@ -79,35 +77,28 @@ class Explorer {
   /**
    * Analyze and extracts infos from epub
    *
-   * @param {UInt8Array} epubData: epub filename or epub binary data
+   * @param epub: epub filename or epub binary data
+   * @param license
    * @param userKeys: user LCP keys
    * @return {Promise} A promise that resolves extra data from the epub
    */
-  analyze(epubData, license, userKeys = null) {
-    return getZipFromData(epubData)
-      .then(zip => {
-        return allSettled([getMetadata(zip), getToc(zip)], 'epub-infos')
-          .then(([metadataResult, tocResult]) => {
-            const bookExtraData = {};
-            if (metadataResult.state === PROMISE_FULFILLED) {
-              bookExtraData.metadata = metadataResult.value;
-            }
-            if (tocResult.state === PROMISE_FULFILLED) {
-              bookExtraData.toc = tocResult.value;
-            }
-            return bookExtraData;
-          })
-          .then(data => {
-            return getSpines.call(this, zip, license, userKeys, data.toc)
-              .then(spines => data.spines = spines)
-              .then(() => computeTocItemsSizes(data.toc))
-              .then(() => generatePagination(data.toc, data.spines))
-              .then(pagination => {
-                data.pagination = pagination;
-                return data;
-              })
-          });
-      });
+  async analyze(epub, license, userKeys = null) {
+    const zip = await getZipFromData(epub);
+
+    const data = {};
+
+    data.license = license || await getLcpLicense(zip);
+    data.metadata = await getMetadata(zip);
+
+    const isFixedLayout = isEpubFixedLayout(data.metadata.meta);
+
+    data.toc = await getToc(zip);
+    data.spines = await getSpines.call(this, zip, license, userKeys, data.toc, !isFixedLayout);
+
+    await computeTocItemsSizes(data.toc);
+    data.pagination = await generatePagination(data.toc, data.spines);
+
+    return data;
   }
 
   /**
