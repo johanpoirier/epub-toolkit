@@ -295,7 +295,7 @@ function getOpfContent(zip) {
 
   return getFile(zip, 'META-INF/container.xml', BYTES_FORMAT)
   // finding .opf path in container.xml
-    .then(parseXml, error => console.error('AAAAHHHH', error))
+    .then(parseXml, error => console.error('Can not parse container.xml file', error))
     .then(document => {
       const opfFilePath = getOpfFilePath(document);
       basePath = getBasePath(opfFilePath);
@@ -336,7 +336,7 @@ async function getSpines(zip, license, keys = null, toc = null, shouldAnalyzeSpi
     const validSpine = {
       idref,
       href,
-      path: `/${basePath}${href}`
+      path: makeAbsolutePath(`${basePath}${href}`)
     };
 
     const spineProperties = spine.attr('properties');
@@ -594,7 +594,7 @@ async function getProtectedFiles(zip) {
         type = keyInfo.attr('xmlns');
       }
 
-      resources[decodeURIComponent(uri)] = {
+      resources[makeAbsolutePath(decodeURIComponent(uri))] = {
         algorithm,
         compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
         originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
@@ -620,6 +620,13 @@ function normalizePath(path) {
     }
     return `${path}${path.length === 0 ? '' : '/'}${part}`;
   });
+}
+
+function makeAbsolutePath(path) {
+  if (path[0] === '/') {
+    return path;
+  }
+  return `/${path}`;
 }
 
 function parseXml(data) {
