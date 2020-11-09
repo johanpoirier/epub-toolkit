@@ -1,6 +1,6 @@
 {
   "name": "epub-toolkit",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "JS modules to explore epub files",
   "main": "lib/epub-toolkit.js",
   "scripts": {
