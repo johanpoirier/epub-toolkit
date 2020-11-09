@@ -1,5 +1,6 @@
 const cheerio = require('cheerio');
 const {resolve} = require('rsvp');
+const forge = require('../../vendor/forge.toolkit');
 
 const UTF8 = 'utf-8';
 const UTF16BE = 'utf-16be';
