@@ -1,77 +1,109 @@
-import {resolve, all} from 'rsvp';
-import {isEmpty, parseXml} from './utils';
+import {all} from 'rsvp';
+import {
+  EMPTY_ELEMENTS_COUNT,
+  enrichTocItems,
+  getSpineElementsCountInDom,
+  isEmpty,
+  isEpubFixedLayout,
+  parseXml
+} from './utils';
+import Epub from './Epub';
+import Lcp from "./Lcp";
 
-const EMPTY_ELEMENTS_COUNT = {characterCount: 0, imageCount: 0, videoCount: 0, totalCount: 0};
+class WebEpub extends Epub {
 
-const TEXT_NODE = 3;
+  constructor(url, license, keys) {
+    super();
 
-class WebEpub {
-
-  constructor(url) {
     this._url = url;
-    this._manifest = null;
+    this._license = license;
+    this._keys = keys;
   }
 
   /**
    *
    */
-  manifest() {
+  async manifest() {
     if (this._manifest !== null) {
-      return resolve(this._manifest);
+      return this._manifest;
     }
-    return fetch(`${this._url}/manifest.json`)
-      .then(response => response.json())
-      .then(manifestJson => {
-        this._manifest = manifestJson;
-        return this._manifest;
-      });
+    this._manifest = await fetch(`${this._url}/manifest.json`).then(response => response.json());
+    return this._manifest;
   }
 
   /**
    *
    * @returns {Promise} A promise that resolves with the metadata of the epub
    */
-  metadata() {
-    return this.manifest().then(manifest => manifest.metadata);
+  async getMetadata() {
+    const manifest = await this.manifest();
+    return manifest.metadata;
+  }
+
+  /**
+   * Get spine from the epub web publication
+   *
+   * @return {Promise} A promise that resolves with an array of each spine character count
+   */
+  async getSpine() {
+    const manifest = await this.manifest();
+    const shouldAnalyzeSpines = isEpubFixedLayout(manifest.metadata.meta);
+
+    const items = manifest['readingOrder'];
+    items.forEach((spine, index) => {
+      spine.cfi = `/6/${2 + index * 2}`;
+      spine.path = makeAbsolutePath(`${this._url}${spine.href}`);
+    });
+
+    if (shouldAnalyzeSpines) {
+      const license = await this.getLicense();
+      const toc = await this.getToc();
+      const userKey = await Lcp.getValidUserKey(license, this._keys);
+      return all(items.map(spine => analyzeSpine(spine, this._url, license, userKey, toc)), 'spines');
+    }
+    return items;
+  }
+
+  /**
+   * Get Table of Content from the epub web publication
+   *
+   * @returns {Promise<Array>}
+   */
+  async getToc() {
+    const manifest = await this.manifest();
+    const tocItems = manifest['toc'];
+    setPositions(tocItems, 1, 0);
+    return tocItems;
+  }
+
+  /**
+   * Get the LCP license of the web publication
+   *
+   * @returns {Promise<string | null>}
+   */
+  async getLicense() {
+    if (this._license) {
+      return this._license;
+    }
+    try {
+      return fetch(`${this._url}/META-INF/license.lcpl`).then(response => response.json());
+    } catch (error) {
+      // no license file
+      return null;
+    }
   }
 
   /**
    *
    * @return {Promise} A promise that resolves with the relative path of the cover file
    */
-  coverPath() {
-    return this.manifest()
-      .then(manifest => {
-        let coverResource = getCoverPathFromMetadata(manifest['resources']);
-        if (!coverResource) {
-          coverResource = getCoverPathFromResources(manifest['resources']);
-        }
-        return coverResource;
-      });
-  }
-
-  /**
-   * Get spines from the epub web publication
-   *
-   * @return {Promise} A promise that resolves with an array of each spine character count
-   */
-  spines() {
-    return this.manifest()
-      .then(manifest => getSpines(manifest['spine'], this._url));
-  }
-
-  /**
-   * Get Table of Content from the epub web publication
-   *
-   * @return {Promise} A promise that resolves with the table of content
-   */
-  toc() {
-    return this.manifest()
-      .then(manifest => {
-        const tocItems = manifest['toc'];
-        setPositions(tocItems, 1, 0);
-        return tocItems;
-      });
+  async coverPath() {
+    const manifest = await this.manifest();
+    let coverResource = getCoverPathFromMetadata(manifest['resources']);
+    if (!coverResource) {
+      coverResource = getCoverPathFromResources(manifest['resources']);
+    }
+    return coverResource;
   }
 
   pagination(tocItems, spines) {
@@ -80,7 +112,6 @@ class WebEpub {
 }
 
 export default WebEpub;
-
 
 
 function getCoverPathFromMetadata(resources) {
@@ -94,65 +125,25 @@ function getCoverPathFromResources(resources) {
   return coverPaths.pop();
 }
 
-function getSpines(spines, baseUri) {
-  for (let spineIndex = 0; spineIndex < spines.length; spineIndex++) {
-    spines[spineIndex].cfi = `/4/${2 + spineIndex * 2}`;
+function makeAbsolutePath(path) {
+  if (path[0] === '/') {
+    return path;
   }
-
-  const promises = [];
-  spines.forEach(spine => promises.push(analyzeSpine(spine, baseUri)));
-  return all(promises);
+  return `/${path}`;
 }
 
-function analyzeSpine(spine, baseUri) {
+function analyzeSpine(spine, baseUri, license, userKey, toc) {
   return fetch(`${baseUri}/${spine.href}`)
     .then(response => response.text())
     .then(parseXml)
     .then(domContent => getSpineElementsCountInDom(domContent)
-      .then(elementsCount => Object.assign(spine, elementsCount))
-      //.then(spine => enrichTocItems(toc, spine, domContent))
+        .then(elementsCount => Object.assign(spine, elementsCount))
+        .then(spine => enrichTocItems(toc, spine, domContent))
     )
     .catch(() => {
       console.warn(`Can’t analyze spine ${spine.path}`);
       return Object.assign(spine, EMPTY_ELEMENTS_COUNT);
     });
-}
-
-function getSpineElementsCountInDom(domContent) {
-  return all([getCharacterCountInDom(domContent), getImageCountInDom(domContent), getVideoCountInDom(domContent)])
-    .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
-    .then(estimateTotalCount)
-    .catch(error => {
-      console.warn('Content analyze failed', error);
-      return EMPTY_ELEMENTS_COUNT;
-    });
-}
-
-function getCharacterCountInDom(domContent) {
-  const elements = domContent('body *');
-  return getCharacterCount(elements.toArray());
-}
-
-function getCharacterCount(elements) {
-  return elements.reduce((total, el) => {
-    const elementInnerContent = el.childNodes.filter(n => n.nodeType === TEXT_NODE).map(n => n.data).join('');
-    return elementInnerContent.length + total;
-  }, 0);
-}
-
-function getImageCountInDom(domContent) {
-  const elements = domContent('img, svg image');
-  return elements.length;
-}
-
-function getVideoCountInDom(domContent) {
-  const elements = domContent('video');
-  return elements.length;
-}
-
-function estimateTotalCount(elementsCounts) {
-  elementsCounts.totalCount = elementsCounts.characterCount + 300 * elementsCounts.imageCount + 300 * elementsCounts.videoCount;
-  return elementsCounts;
 }
 
 function setPositions(items, level, endpoints) {

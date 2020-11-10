@@ -1,34 +1,18 @@
-import {all, hash, Promise} from 'rsvp';
-import {convertUtf16Data, isEpubFixedLayout, isEmpty} from './utils';
+import {all, Promise} from 'rsvp';
+import {isEpubFixedLayout, isEmpty} from './utils';
 import ZipEpub from './ZipEpub';
 import WebEpub from './WebEpub';
-import Lcp, {PROTECTION_METHODS} from './Lcp';
+import Lcp from './Lcp';
 import JSZip from 'jszip';
 import cheerio from 'cheerio';
 
-import EpubCFI from './cfi/epubcfi';
-import parseToc from './TocParser';
-import {FileNotFoundError} from './errors';
-
 const UTF8 = 'utf-8';
-const UTF16BE = 'utf-16be';
-const UTF16LE = 'utf-16le';
-const UTF32BE = 'utf-32be';
-const UTF32LE = 'utf-32le';
 
-const UTF16BE_BOM_MARKER = '254-255';
-const UTF16LE_BOM_MARKER = '255-254';
-const UTF32BE_BOM_MARKER = '0-0-254-255';
-const UTF32LE_BOM_MARKER = '255-254-0-0';
 
 const BYTES_FORMAT = 'uint8array';
-const STRING_FORMAT = 'string';
-const ARRAYBUFFER_FORMAT = 'arraybuffer';
 
 const EPUB_FILE_MIME_TYPE = 'application/epub+zip';
 const ASCM_XML_ROOT_TAG = 'fulfillmentToken';
-
-const EMPTY_ELEMENTS_COUNT = {characterCount: 0, imageCount: 0, videoCount: 0, totalCount: 0};
 
 const PROTECTION_METHOD = {
   ADOBE_DRM: 'http://ns.adobe.com/adept',
@@ -40,38 +24,38 @@ const PROTECTION_METHOD = {
 
 const LCP_PROTECTION_TYPE = 'http://readium.org/2014/01/lcp#EncryptedContentKey';
 
-const TEXT_NODE = 3;
-
 class Explorer {
 
   /**
    * @param data
    * @param license
-   * @param userKey
+   * @param keys
    * @returns {Promise<ZipEpub>}
    */
-  loadFromBinary(data, license = null, userKey = null) {
-    return JSZip
-      .loadAsync(data)
-      .then(zip => new ZipEpub(zip, license, userKey));
+  async loadFromBinary(data, license = null, keys = []) {
+    const zip = await JSZip.loadAsync(data);
+    return new ZipEpub(zip, license, keys);
   }
 
   /**
    * @param data
+   * @param license
+   * @param keys
    * @returns {Promise<ZipEpub>}
    */
-  loadFromBase64(data) {
-    return JSZip
-      .loadAsync(data, {base64: true})
-      .then(zip => new ZipEpub(zip));
+  async loadFromBase64(data, license = null, keys = []) {
+    const zip = await JSZip.loadAsync(data, {base64: true});
+    return new ZipEpub(zip, license, keys);
   }
 
   /**
    * @param url
+   * @param license
+   * @param keys
    * @returns {Promise<WebEpub>}
    */
-  async loadFromWebPubUrl(url) {
-    return new WebEpub(url);
+  async loadFromWebPubUrl(url, license = null, keys = []) {
+    return new WebEpub(url, license, keys);
   }
 
   /**
@@ -246,77 +230,6 @@ function getZipFromData(data) {
   return JSZip.loadAsync(data, options);
 }
 
-function getFile(zip, path, format = STRING_FORMAT) {
-  console.log('getting file', path);
-  const zipFile = zip.file(normalizePath(path));
-  if (!zipFile) {
-    throw new FileNotFoundError(`file ${path} not found in zip`);
-  }
-
-  return zipFile.async(format);
-}
-
-async function getFileContent(zip, path, protection, license, key) {
-  try {
-    const format = isEmpty(protection) ? STRING_FORMAT : ARRAYBUFFER_FORMAT;
-    let fileContent = await getFile(zip, path, format);
-
-    if (isEmpty(protection)) {
-      return fileContent;
-    }
-
-    if (protection.type === PROTECTION_METHODS.LCP) {
-      fileContent = await Lcp.decipherTextFile(fileContent, protection, license, key);
-
-      if (/html/.test(path)) {
-        fileContent = convertUtf16Data(fileContent);
-      }
-    }
-
-    return fileContent;
-
-  } catch (error) {
-    console.warn(`Can’t extract content of file at ${path}`, error);
-    return '';
-  }
-}
-
-async function getLcpLicense(zip) {
-  try {
-    const licenseJson = await getFile(zip, 'META-INF/license.lcpl');
-    return JSON.parse(licenseJson);
-  } catch {
-    return null;
-  }
-}
-
-function getOpfContent(zip) {
-  let basePath;
-
-  return getFile(zip, 'META-INF/container.xml', BYTES_FORMAT)
-  // finding .opf path in container.xml
-    .then(parseXml, error => console.error('Can not parse container.xml file', error))
-    .then(document => {
-      const opfFilePath = getOpfFilePath(document);
-      basePath = getBasePath(opfFilePath);
-      return getFile(zip, opfFilePath);
-    })
-    .then(opfXml => {
-      return hash({
-        basePath: basePath,
-        opf: parseXml(opfXml.trim())
-      });
-    });
-}
-
-function getBasePath(contentFilePath) {
-  const result = contentFilePath.match(/^(\w*)\/\w*\.opf$/);
-  if (result) {
-    return result[1] + '/';
-  }
-  return '';
-}
-
 async function getSpines(zip, license, keys = null, toc = null, shouldAnalyzeSpines = true) {
   if (isEmpty(license)) {
     license = await getLcpLicense(zip);
@@ -364,175 +277,7 @@ async function getSpines(zip, license, keys = null, toc = null, shouldAnalyzeSpi
   return validSpines;
 }
 
-function analyzeSpine(zip, spine, license, userKey, toc) {
-  return getFileContent.call(this, zip, spine.path, spine.protection, license, userKey)
-    .then(parseXml)
-    .then(domContent => getSpineElementsCountInDom(domContent)
-      .then(elementsCount => Object.assign(spine, elementsCount))
-      .then(spine => enrichTocItems(toc, spine, domContent))
-    )
-    .catch(error => {
-      console.warn(`Can’t analyze spine ${spine.path}`, error);
-      return Object.assign(spine, EMPTY_ELEMENTS_COUNT);
-    });
-}
 
-function getSpineElementsCountInDom(domContent) {
-  return all([getCharacterCountInDom(domContent), getImageCountInDom(domContent), getVideoCountInDom(domContent)], 'spine analysis')
-    .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
-    .then(estimateTotalCount)
-    .catch(error => {
-      console.warn('Content analyze failed', error);
-      return EMPTY_ELEMENTS_COUNT;
-    });
-}
-
-function getElementsCount(elements) {
-  return all([getCharacterCount(elements), getImageCount(elements), getVideoCount(elements)], 'elements count')
-    .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
-    .then(estimateTotalCount)
-    .catch(error => {
-      console.warn('Content analyze failed', error);
-      return EMPTY_ELEMENTS_COUNT;
-    });
-}
-
-function getCharacterCountInDom(domContent) {
-  const elements = domContent('body *');
-  return getCharacterCount(elements.toArray());
-}
-
-function getCharacterCount(elements) {
-  return elements.reduce((total, el) => {
-    const elementInnerContent = el.childNodes.filter(n => n.nodeType === TEXT_NODE).map(n => n.data).join('');
-    return elementInnerContent.length + total;
-  }, 0);
-}
-
-function getImageCountInDom(domContent) {
-  const elements = domContent('img, svg image');
-  return elements.length;
-}
-
-function getImageCount(elements) {
-  const imageTagNames = ['img', 'image'];
-  return elements.filter(el => imageTagNames.includes(el.tagName)).length;
-}
-
-function getVideoCountInDom(domContent) {
-  const elements = domContent('video');
-  return elements.length;
-}
-
-function getVideoCount(elements) {
-  return elements.filter(el => el.tagName === 'video').length;
-}
-
-function enrichTocItems(items, spine, spineDomContent) {
-  if (items) {
-    const spineElements = spineDomContent('body *').toArray();
-
-    findTocItemsInSpine(items, spine.href).map(item => {
-      item.cfi = computeCfi(spine.cfi, spineDomContent, getHashFromHref(item.href));
-
-      const itemElementId = spineElements.findIndex(el => el.id === getHashFromHref(item.href));
-      if (itemElementId === -1) {
-        item.positionInSpine = 0;
-        return;
-      }
-
-      getElementsCount(spineElements.slice(0, itemElementId)).then(elementsCount => item.positionInSpine = elementsCount.totalCount / spine.totalCount);
-    });
-  }
-  return spine;
-}
-
-function getHashFromHref(href) {
-  const hrefSplit = href.split('#');
-  return hrefSplit.length > 1 ? hrefSplit[1] : null;
-}
-
-function findTocItemsInSpine(items, href) {
-  items = items || [];
-  let matchingItems = items.filter(item => item.href.indexOf(href) === 0);
-  items.forEach(item => {
-    matchingItems = matchingItems.concat(findTocItemsInSpine(item.items, href))
-  });
-  return matchingItems;
-}
-
-function computeCfi(baseCfi, spineContent, hash) {
-  if (hash) {
-    const hashElement = spineContent(`#${hash}`);
-    if (hashElement.length > 0) {
-      return new EpubCFI(hashElement[0], baseCfi).toString();
-    }
-  }
-
-  return `epubcfi(${baseCfi}!/4)`;
-}
-
-function getOpfFilePath(document) {
-  return document('rootfile').attr('full-path');
-}
-
-function getMetadata(zip) {
-  return getOpfContent(zip)
-    .then(({opf}) => {
-      const fixedMetadata = {};
-      const metadata = opf('metadata > *');
-
-      metadata.each((index, entry) => {
-        const data = extractMetadataEntry(entry);
-        fixedMetadata[data.key] = data.value;
-      });
-      return fixedMetadata;
-    });
-}
-
-function extractMetadataEntry(entry) {
-  const element = cheerio(entry);
-  const tagName = entry.tagName;
-
-  let key, value;
-
-  if (tagName === 'meta') {
-    key = element.attr('property');
-
-    if (key) {
-      value = element.text();
-    } else {
-      key = element.attr('name');
-      value = element.attr('content');
-    }
-  } else {
-    key = tagName;
-    value = element.text();
-  }
-
-  return {key, value};
-}
-
-async function getToc(zip) {
-  try {
-    const {basePath, opf} = await getOpfContent(zip);
-
-    let tocElement = opf('item[media-type="application/x-dtbncx+xml"]'); // epub 2
-    if (isEmpty(tocElement)) {
-      tocElement = opf('item[properties="nav"]'); // epub 3
-    }
-    if (isEmpty(tocElement)) {
-      return null;
-    }
-
-    const tocFilename = tocElement.attr('href');
-    const tocFile = await getFile(zip, basePath + tocFilename);
-    return parseToc(basePath, parseXml(tocFile));
-  } catch (error) {
-    console.warn('failed to parse toc file', error);
-    return null;
-  }
-}
 
 function getCoverData(zip) {
   return getCoverPath(zip)
@@ -606,135 +351,6 @@ async function getProtectedFiles(zip) {
   } catch (error) {
     console.warn(error);
     throw error;
-  }
-}
-
-function normalizePath(path) {
-  const parts = path.split('/');
-
-  return parts.reduce((path, part) => {
-    if (part === '..') {
-      return path.split('/').slice(0, -1).join('/');
-    } else if (part === '.') {
-      return path;
-    }
-    return `${path}${path.length === 0 ? '' : '/'}${part}`;
-  });
-}
-
-function makeAbsolutePath(path) {
-  if (path[0] === '/') {
-    return path;
-  }
-  return `/${path}`;
-}
-
-function parseXml(data) {
-  const xmlData = typeof data === 'string' ? data.trim() : bytesToString(data);
-  return cheerio.load(xmlData, {xmlMode: true});
-}
-
-function bytesToString(uint8array) {
-  const charset = detectCharset(uint8array);
-
-  if (typeof TextDecoder === 'undefined') {
-    return String.fromCharCode.apply(null, uint8array);
-  }
-
-  const textDecoder = new TextDecoder(charset);
-  return textDecoder.decode(uint8array);
-}
-
-function detectCharset(uint8array) {
-  const utf16Test = uint8array.subarray(0, 2).join('-');
-  if (utf16Test === UTF16LE_BOM_MARKER) {
-    return UTF16LE;
-  } else if (utf16Test === UTF16BE_BOM_MARKER) {
-    return UTF16BE;
-  }
-
-  const utf32Test = uint8array.subarray(0, 4).join('-');
-  if (utf32Test === UTF32LE_BOM_MARKER) {
-    return UTF32LE;
-  } else if (utf32Test === UTF32BE_BOM_MARKER) {
-    return UTF32BE;
-  }
-
-  return UTF8;
-}
-
-function estimateTotalCount(elementsCounts) {
-  elementsCounts.totalCount = elementsCounts.characterCount + 300 * elementsCounts.imageCount + 300 * elementsCounts.videoCount;
-  return elementsCounts;
-}
-
-function computeTocItemsSizes(items, basePosition = 0, baseSize = 1) {
-  if (isEmpty(items)) {
-    return;
-  }
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    let sizeInSpine = baseSize;
-
-    if (i + 1 < items.length) {
-      const nextItem = items[i + 1];
-      if (inSameSpine(item, nextItem)) {
-        sizeInSpine = nextItem.positionInSpine - item.positionInSpine;
-      }
-    } else {
-      sizeInSpine = baseSize + basePosition - item.positionInSpine;
-    }
-
-    if (sizeInSpine < 0) {
-      console.warn('Can’t compute size of chapter in spine due to some weirdness in the ToC', item);
-      sizeInSpine = 0;
-    }
-
-    computeTocItemsSizes(item.items, item.positionInSpine, sizeInSpine);
-
-    item.percentageOfSpine = 100 * sizeInSpine;
-  }
-}
-
-function inSameSpine(item1, item2) {
-  return item1.href.split('#')[0] === item2.href.split('#')[0];
-}
-
-function generatePagination(tocItems, spines) {
-  const totalCount = spines.reduce((total, spine) => total + spine.totalCount, 0);
-
-  const elements = [];
-  let spineIndex = 0, combinedSize = 0, maxLevel = 1;
-
-  while (spineIndex < spines.length) {
-    const spine = spines[spineIndex];
-    const items = findTocItemsInSpine(tocItems, spine.href);
-    maxLevel = items.reduce((max, item) => item.level > max ? item.level : max, maxLevel);
-
-    let label;
-    if (isEmpty(items)) {
-      label = isEmpty(elements) ? spine.href.split('.')[0] : elements[spineIndex - 1].label;
-    } else {
-      label = items[0].label
-    }
-
-    const element = {
-      items,
-      label,
-      percentageOfBook: 100 * spine.totalCount / totalCount,
-      positionInBook: combinedSize
-    };
-    elements.push(element);
-
-    combinedSize += element.percentageOfBook;
-    spineIndex++;
-  }
-
-  return {
-    totalCount,
-    maxLevel,
-    elements
   }
 }
 

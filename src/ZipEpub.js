@@ -1,54 +1,146 @@
 import cheerio from 'cheerio';
-import {hash} from 'rsvp';
+import {all} from 'rsvp';
 import Lcp from './Lcp';
-import {isEmpty, parseXml, normalizePath, getOpfFilePath, getBasePath, getDirPath} from './utils';
+import {
+  isEmpty,
+  parseXml,
+  getDirPath,
+  makeAbsolutePath,
+  computeTocItemsSizes,
+  generatePagination
+} from './utils';
+import {analyzeSpineItem, getFile, getLcpLicense, getOpfContent, STRING_FORMAT} from './utils/zipTools';
 import mime from 'mime-types';
+import Epub from './Epub';
+import parseToc from './TocParser';
+
 const forge = require('../vendor/forge.toolkit');
 
-class ZipEpub  {
-  constructor(zip, license, userKey) {
-    this.zip = zip;
-    this.license = license;
-    this.userKey = userKey;
+class ZipEpub extends Epub {
+  constructor(zip, license, keys) {
+    super();
 
-    this.uid = null;
-    this.metadata = null;
-    this.protectedFiles = null;
+    this._zip = zip;
+    this._license = license;
+    this._keys = keys;
+  }
+
+  async analyze() {
+    const data = await super.analyze();
+
+    await computeTocItemsSizes(data.toc);
+
+    if (!isEpubFixedLayout(data.metadata)) {
+      data.pagination = await generatePagination(data.toc, data.spine);
+    }
+
+    return data;
   }
 
   async getMetadata() {
-    if (!this.metadata) {
-      this.metadata = await getMetadata(this.zip);
+    if (!this._metadata) {
+      this._metadata = await getMetadata(this._zip);
     }
-    return this.metadata;
+    return this._metadata;
+  }
+
+  async getLicense() {
+    if (this._license) {
+      return this._license;
+    }
+    return getLcpLicense(this._zip);
+  }
+
+  async getSpine() {
+    const license = await this.getLicense();
+    const toc = await this.getToc();
+
+    // finding spines in .opf
+    const {basePath, opf} = await getOpfContent(this._zip);
+    const validSpineItems = [];
+    opf('spine > itemref').each((index, element) => {
+      const spineItem = cheerio(element);
+      const idref = spineItem.attr('idref');
+      const item = opf(`manifest > item[id="${idref}"]`);
+      if (isEmpty(item)) {
+        return;
+      }
+      const href = item.attr('href');
+      const validSpineItem = {
+        idref,
+        href,
+        path: makeAbsolutePath(`${basePath}${href}`)
+      };
+
+      const spineProperties = spineItem.attr('properties');
+      if (!isEmpty(spineProperties)) {
+        validSpineItem.spread = spineProperties;
+      }
+
+      validSpineItems.push(validSpineItem);
+    });
+
+    const protectedFiles = await this.getProtectedFiles(this._zip);
+    validSpineItems.forEach((item, index) => {
+      item.cfi = `/6/${2 + index * 2}`;
+      item.protection = protectedFiles[item.path];
+    });
+
+    if (!isEpubFixedLayout((await this.getMetadata()))) {
+      const userKey = await Lcp.getValidUserKey(license, this._keys);
+      return all(validSpineItems.map(spine => analyzeSpineItem.call(this, this._zip, spine, license, userKey, toc)), 'spine analysis');
+    }
+
+    return validSpineItems;
+  }
+
+  async getToc() {
+    try {
+      const {basePath, opf} = await getOpfContent(this._zip);
+
+      let tocElement = opf('item[media-type="application/x-dtbncx+xml"]'); // epub 2
+      if (isEmpty(tocElement)) {
+        tocElement = opf('item[properties="nav"]'); // epub 3
+      }
+      if (isEmpty(tocElement)) {
+        return null;
+      }
+
+      const tocFilename = tocElement.attr('href');
+      const tocFile = await getFile(this._zip, basePath + tocFilename);
+      return parseToc(basePath, parseXml(tocFile));
+    } catch (error) {
+      console.warn('failed to parse toc file', error);
+      return null;
+    }
   }
 
   getCoverPath() {
-    return getCoverPath(this.zip);
+    return getCoverPath(this._zip);
   }
 
   async getProtectedFiles() {
     if (!this.protectedFiles) {
-      this.protectedFiles = await getProtectedFiles(this.zip);
+      this.protectedFiles = await getProtectedFiles(this._zip);
     }
     return this.protectedFiles;
   }
 
   async getUid() {
     if (this.uid === null) {
-      const metadata = await getMetadata(this.zip);
+      const metadata = await getMetadata(this._zip);
       this.uid = metadata['dc:identifier'] || 0;
     }
     return this.uid;
   }
 
   async getFileProtection(path) {
-    const protections = await getProtectedFiles(this.zip);
+    const protections = await getProtectedFiles(this._zip);
     return protections[path];
   }
 
   async getFile(path) {
-    const zipFile = this.zip.file(path);
+    const zipFile = this._zip.file(path);
     if (!zipFile) {
       return;
     }
@@ -63,10 +155,6 @@ class ZipEpub  {
 }
 
 export default ZipEpub;
-
-
-const BYTES_FORMAT = 'uint8array';
-const STRING_FORMAT = 'string';
 
 const ENCRYPTION_METHODS = {
   IDPF: 'http://www.idpf.org/2008/embedding',
@@ -95,34 +183,6 @@ async function getZipFileData(zipFile, contentType, protection, license, userKey
       // not implemented yet
       return zipFile.async(fetchMode);
   }
-}
-
-async function getFile(zip, path, format = STRING_FORMAT) {
-  const zipFile = zip.file(normalizePath(path));
-  if (!zipFile) {
-    throw new Error(`file ${path} not found in zip`);
-  }
-
-  return zipFile.async(format);
-}
-
-function getOpfContent(zip) {
-  let basePath;
-
-  return getFile(zip, 'META-INF/container.xml', BYTES_FORMAT)
-  // finding .opf path in container.xml
-    .then(parseXml)
-    .then(document => {
-      const opfFilePath = getOpfFilePath(document);
-      basePath = getBasePath(opfFilePath);
-      return getFile(zip, opfFilePath);
-    })
-    .then(opfXml => {
-      return hash({
-        basePath: basePath,
-        opf: parseXml(opfXml.trim())
-      }, 'opf-data');
-    });
 }
 
 function getMetadata(zip) {
@@ -269,35 +329,32 @@ function getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reje
 }
 
 async function getProtectedFiles(zip) {
+  let encryptionFile;
   try {
-    const xmlFile = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT)
-      .then(parseXml)
-      .catch(() => {
-        // no encryption.xml, so no protection
-        return null;
-      });
+    const xmlData = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT);
+    encryptionFile = parseXml(xmlData);
+  } catch (error) {
+    return {};
+  }
 
-    if (xmlFile === null) {
-      return {};
-    }
-
+  try {
     const resources = {};
-    xmlFile('EncryptedData').each((index, element) => {
-      const uri = xmlFile('CipherData > CipherReference', element).attr('URI');
-      const algorithm = xmlFile('EncryptionMethod', element).attr('Algorithm');
-      const compression = xmlFile('Compression', element);
+    encryptionFile('EncryptedData').each((index, element) => {
+      const uri = encryptionFile('CipherData > CipherReference', element).attr('URI');
+      const algorithm = encryptionFile('EncryptionMethod', element).attr('Algorithm');
+      const compression = encryptionFile('Compression', element);
 
       let type = null;
-      const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
+      const retrievalMethod = encryptionFile('KeyInfo > RetrievalMethod', element);
       if (retrievalMethod.length > 0) {
         type = retrievalMethod.attr('Type');
       }
-      const keyInfo = xmlFile('KeyInfo > resource', element);
+      const keyInfo = encryptionFile('KeyInfo > resource', element);
       if (keyInfo.length > 0) {
         type = keyInfo.attr('xmlns');
       }
 
-      resources[decodeURIComponent(uri)] = {
+      resources[makeAbsolutePath(decodeURIComponent(uri))] = {
         algorithm,
         compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
         originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
@@ -374,4 +431,13 @@ function extractMetadataEntry(entry) {
   }
 
   return {key, value};
+}
+
+function isEpubFixedLayout(meta) {
+  if (!meta) {
+    return false;
+  }
+
+  const formatData = meta['rendition:layout'];
+  return formatData && formatData === 'pre-paginated';
 }
