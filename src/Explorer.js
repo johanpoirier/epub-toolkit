@@ -5,6 +5,7 @@ import WebEpub from './WebEpub';
 import Lcp from './Lcp';
 import JSZip from 'jszip';
 import cheerio from 'cheerio';
+import {getLcpLicense} from "./utils/zipTools";
 
 const UTF8 = 'utf-8';
 
@@ -55,54 +56,10 @@ class Explorer {
    * @returns {Promise<WebEpub>}
    */
   async loadFromWebPubUrl(url, license = null, keys = []) {
+    if (url[url.length - 1] === '/') {
+      url = url.substr(0, url.length - 1);
+    }
     return new WebEpub(url, license, keys);
-  }
-
-  /**
-   * Analyze and extracts infos from epub
-   *
-   * @param epub: epub filename or epub binary data
-   * @param license
-   * @param userKeys: user LCP keys
-   * @return {Promise} A promise that resolves extra data from the epub
-   */
-  async analyze(epub, license, userKeys = null) {
-    const zip = await getZipFromData(epub);
-
-    const data = {};
-
-    data.license = license || await getLcpLicense(zip);
-    data.metadata = await getMetadata(zip);
-
-    const isFixedLayout = isEpubFixedLayout(data.metadata.meta);
-
-    data.toc = await getToc(zip);
-    data.spines = await getSpines.call(this, zip, license, userKeys, data.toc, !isFixedLayout);
-
-    await computeTocItemsSizes(data.toc);
-    data.pagination = await generatePagination(data.toc, data.spines);
-
-    return data;
-  }
-
-  /**
-   * Get metadata from epub data
-   *
-   * @param {UInt8Array} epubData
-   * @return {Promise} A promise that resolves with the metadata
-   */
-  metadata(epubData) {
-    return getZipFromData(epubData).then(getMetadata);
-  }
-
-  /**
-   * Get Table of Content from epub data
-   *
-   * @param {UInt8Array} epubData
-   * @return {Promise} A promise that resolves with the table of content
-   */
-  toc(epubData) {
-    return getZipFromData(epubData).then(getToc);
   }
 
   /**
@@ -116,26 +73,14 @@ class Explorer {
   }
 
   /**
-   * Get spines from epub data
-   *
-   * @param {UInt8Array} epubData
-   * @param {Array} keys: User LCP keys
-   * @return {Promise} A promise that resolves with an array of each spine character count
-   */
-  spines(epubData, keys = null) {
-    return getZipFromData(epubData)
-      .then(zip => getSpines.call(this, zip, keys));
-  }
-
-  /**
    * Extracts LCP license from epub
    *
-   * @param {UInt8Array} epubData: epub binary data
+   * @param epubData: epub binary data
    * @return {Promise} A promise that resolves with the parsed LCP license
    */
-  lcpLicense(epubData) {
-    return getZipFromData(epubData)
-      .then(getLcpLicense);
+  async lcpLicense(epubData) {
+    const zip = await getZipFromData(epubData);
+    return getLcpLicense(zip);
   }
 
   /**
@@ -146,16 +91,6 @@ class Explorer {
   protections(epubData) {
     return getZipFromData(epubData)
       .then(getProtections);
-  }
-
-  /**
-   * Extracts protected file list from epub
-   *
-   * @param {UInt8Array} epubData: epub binary data
-   */
-  protectedFiles(epubData) {
-    return getZipFromData(epubData)
-      .then(getProtectedFiles);
   }
 
   /**
@@ -176,6 +111,13 @@ class Explorer {
     return isAscmFile(epubData);
   }
 
+  /**
+   *
+   * @param epubData
+   * @param license
+   * @param userKey
+   * @returns {Promise<*>}
+   */
   async decipher(epubData, license, userKey) {
     const zip = await getZipFromData(epubData);
     license = license || await getLcpLicense(zip);

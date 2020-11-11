@@ -280,3 +280,55 @@ export function generatePagination(tocItems, spines) {
     elements
   }
 }
+
+export function extractEncryptionsData(encryptionFile) {
+  try {
+    const resources = {};
+    encryptionFile('EncryptedData').each((index, element) => {
+      const uri = encryptionFile('CipherData > CipherReference', element).attr('URI');
+      const algorithm = encryptionFile('EncryptionMethod', element).attr('Algorithm');
+      const compression = encryptionFile('Compression', element);
+
+      let type = null;
+      const retrievalMethod = encryptionFile('KeyInfo > RetrievalMethod', element);
+      if (retrievalMethod.length > 0) {
+        type = retrievalMethod.attr('Type');
+      }
+      const keyInfo = encryptionFile('KeyInfo > resource', element);
+      if (keyInfo.length > 0) {
+        type = keyInfo.attr('xmlns');
+      }
+
+      resources[makeAbsolutePath(decodeURIComponent(uri))] = {
+        algorithm,
+        compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
+        originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
+        type
+      };
+    });
+
+    return resources;
+  } catch (error) {
+    console.warn(error);
+    throw error;
+  }
+}
+
+export function fetchAsArrayBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const req = new XMLHttpRequest();
+    req.open('GET', url, true);
+    req.responseType = 'arraybuffer';
+
+    req.onload = function() {
+      const arrayBuffer = req.response;
+      if (arrayBuffer) {
+        resolve(arrayBuffer);
+      }
+    };
+
+    req.onerror = reject;
+
+    req.send(null);
+  });
+}

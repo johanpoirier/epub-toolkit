@@ -7,7 +7,7 @@ import {
   getDirPath,
   makeAbsolutePath,
   computeTocItemsSizes,
-  generatePagination
+  generatePagination, extractEncryptionsData
 } from './utils';
 import {analyzeSpineItem, getFile, getLcpLicense, getOpfContent, STRING_FORMAT} from './utils/zipTools';
 import mime from 'mime-types';
@@ -329,43 +329,13 @@ function getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reje
 }
 
 async function getProtectedFiles(zip) {
-  let encryptionFile;
   try {
     const xmlData = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT);
-    encryptionFile = parseXml(xmlData);
+    const encryptionFile = parseXml(xmlData);
+
+    return extractEncryptionsData(encryptionFile);
   } catch (error) {
     return {};
-  }
-
-  try {
-    const resources = {};
-    encryptionFile('EncryptedData').each((index, element) => {
-      const uri = encryptionFile('CipherData > CipherReference', element).attr('URI');
-      const algorithm = encryptionFile('EncryptionMethod', element).attr('Algorithm');
-      const compression = encryptionFile('Compression', element);
-
-      let type = null;
-      const retrievalMethod = encryptionFile('KeyInfo > RetrievalMethod', element);
-      if (retrievalMethod.length > 0) {
-        type = retrievalMethod.attr('Type');
-      }
-      const keyInfo = encryptionFile('KeyInfo > resource', element);
-      if (keyInfo.length > 0) {
-        type = keyInfo.attr('xmlns');
-      }
-
-      resources[makeAbsolutePath(decodeURIComponent(uri))] = {
-        algorithm,
-        compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
-        originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
-        type
-      };
-    });
-
-    return resources;
-  } catch (error) {
-    console.warn(error);
-    throw error;
   }
 }
 

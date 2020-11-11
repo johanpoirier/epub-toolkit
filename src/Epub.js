@@ -1,4 +1,8 @@
 export default class Epub {
+  setKeys(keys) {
+    this._keys = keys;
+  }
+
   async analyze() {
     return {
       license: await this.license(),
