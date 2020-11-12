@@ -4,12 +4,19 @@ import Lcp from './Lcp';
 import {
   isEmpty,
   parseXml,
-  getDirPath,
   makeAbsolutePath,
-  computeTocItemsSizes,
-  generatePagination, extractEncryptionsData
+  generatePagination,
+  extractEncryptionsData
 } from './utils';
-import {analyzeSpineItem, getFile, getLcpLicense, getOpfContent, STRING_FORMAT} from './utils/zipTools';
+import {
+  analyzeSpineItem,
+  getCoverPath,
+  getFile,
+  getLcpLicense,
+  getOpfContent,
+  getProtectedFiles,
+  STRING_FORMAT
+} from './utils/zipTools';
 import mime from 'mime-types';
 import Epub from './Epub';
 import parseToc from './TocParser';
@@ -17,24 +24,13 @@ import parseToc from './TocParser';
 const forge = require('../vendor/forge.toolkit');
 
 class ZipEpub extends Epub {
+
   constructor(zip, license, keys) {
     super();
 
     this._zip = zip;
     this._license = license;
     this._keys = keys;
-  }
-
-  async analyze() {
-    const data = await super.analyze();
-
-    await computeTocItemsSizes(data.toc);
-
-    if (!isEpubFixedLayout(data.metadata)) {
-      data.pagination = await generatePagination(data.toc, data.spine);
-    }
-
-    return data;
   }
 
   async getMetadata() {
@@ -52,6 +48,10 @@ class ZipEpub extends Epub {
   }
 
   async getSpine() {
+    if (this._spine) {
+      return this._spine;
+    }
+
     const license = await this.getLicense();
     const toc = await this.getToc();
 
@@ -88,13 +88,19 @@ class ZipEpub extends Epub {
 
     if (!isEpubFixedLayout((await this.getMetadata()))) {
       const userKey = await Lcp.getValidUserKey(license, this._keys);
-      return all(validSpineItems.map(spine => analyzeSpineItem.call(this, this._zip, spine, license, userKey, toc)), 'spine analysis');
+      this._spine = await all(validSpineItems.map(spine => analyzeSpineItem.call(this, this._zip, spine, license, userKey, toc)), 'spine analysis');
+    } else {
+      this._spine = validSpineItems;
     }
 
-    return validSpineItems;
+    return this._spine;
   }
 
   async getToc() {
+    if (this._toc) {
+      return this._toc;
+    }
+
     try {
       const {basePath, opf} = await getOpfContent(this._zip);
 
@@ -108,11 +114,27 @@ class ZipEpub extends Epub {
 
       const tocFilename = tocElement.attr('href');
       const tocFile = await getFile(this._zip, basePath + tocFilename);
-      return parseToc(basePath, parseXml(tocFile));
+      this._toc = parseToc(basePath, parseXml(tocFile));
+      return this._toc;
     } catch (error) {
       console.warn('failed to parse toc file', error);
       return null;
     }
+  }
+
+  async getPagination() {
+    if (await this.isFixedLayout()) {
+      return null;
+    }
+    if (!this._pagination) {
+      this._pagination = await generatePagination(await this.getToc(), await this.getSpine());
+    }
+    return this._pagination;
+  }
+
+  async isFixedLayout() {
+    const metadata = await this.getMetadata();
+    return isEpubFixedLayout(metadata);
   }
 
   getCoverPath() {
@@ -201,142 +223,6 @@ function getMetadata(zip) {
       });
       return fixedMetadata;
     });
-}
-
-function getCoverPath(zip) {
-  return getOpfContent(zip)
-    .then(({basePath, opf}) => getCoverFilePath(zip, opf, basePath));
-}
-
-function getCoverFilePath(zip, opf, basePath) {
-  return new Promise((resolve, reject) => {
-    // method 1: search for meta cover
-    getCoverFilePathFromMetaCover(opf, basePath)
-      .then(resolve)
-
-      // method 2: search for an item in manifest with cover-image property
-      .catch(() => getCoverFilePathFromManifestItem(opf, basePath))
-      .then(resolve)
-
-      // method 3 : search for a reference in the guide
-      .catch(() => getCoverFilePathFromGuide(opf, basePath, zip))
-      .then(resolve)
-
-      // method 4 : browse 3 first items of the spine
-      .catch(() => getCoverFilePathFromSpineItems(opf, basePath, zip))
-      .then(resolve)
-
-      .catch(reject);
-  });
-}
-
-function getImagePathFromXhtml(xhtml) {
-  const coverPage = cheerio.load(xhtml);
-
-  const coverImg = coverPage('img');
-  if (!isEmpty(coverImg)) {
-    return coverImg.attr('src');
-  }
-
-  const coverImage = coverPage('image');
-  if (!isEmpty(coverImage)) {
-    return coverImage.attr('href');
-  }
-}
-
-function getCoverFilePathFromMetaCover(opf, basePath) {
-  return new Promise((resolve, reject) => {
-    const coverItemRef = opf('metadata > meta[name="cover"]');
-    if (!coverItemRef) {
-      reject('no cover data found in metadata');
-      return;
-    }
-    const coverItem = opf(`manifest > item[id='${coverItemRef.attr('content')}']`);
-    if (isEmpty(coverItem)) {
-      reject(`no item found in manifest with id ${coverItemRef.attr('content')}`);
-      return;
-    }
-    resolve(basePath + coverItem.attr('href'));
-  });
-}
-
-function getCoverFilePathFromManifestItem(opf, basePath) {
-  return new Promise((resolve, reject) => {
-    const coverItem = opf('manifest > item[properties="cover-image"]');
-    if (isEmpty(coverItem)) {
-      reject('no item with properties "cover-image" found in manifest');
-      return;
-    }
-    resolve(basePath + coverItem.attr('href'));
-  });
-}
-
-function getCoverFilePathFromGuide(opf, basePath, zip) {
-  return new Promise((resolve, reject) => {
-    const coverItem = opf('guide > reference[type="cover"]');
-    if (isEmpty(coverItem)) {
-      reject('no item of type "cover" found in guide');
-      return;
-    }
-
-    const itemBasePath = basePath + getDirPath(coverItem.attr('href'));
-    getFile(zip, basePath + coverItem.attr('href'))
-      .then((coverPageXml) => {
-        const coverPath = getImagePathFromXhtml(coverPageXml);
-        if (coverPath) {
-          resolve(itemBasePath + coverPath);
-        } else {
-          reject('no image url found in xhtml page');
-        }
-      });
-  });
-}
-
-function getCoverFilePathFromSpineItems(opf, basePath, zip) {
-  return new Promise((resolve, reject) => {
-    const spineItems = opf('spine > itemref');
-    if (isEmpty(spineItems)) {
-      reject('no spine items found');
-      return;
-    }
-    const idrefs = spineItems.slice(0, 3).map((index, item) => cheerio(item).attr('idref')).toArray();
-    getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject);
-  });
-}
-
-function getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject) {
-  if (idrefs.length === 0) {
-    reject('no spine item found with cover image inside');
-    return;
-  }
-
-  const id = idrefs.shift();
-  const item = opf(`manifest > item[id="${id}"]`);
-  if (isEmpty(item) || !item.attr('href')) {
-    reject(`no valid manifest item found with id ${id}`);
-    return;
-  }
-
-  const spineItemBasePath = basePath + getDirPath(item.attr('href'));
-  getFile(zip, basePath + item.attr('href')).then((itemXml) => {
-    const coverPath = getImagePathFromXhtml(itemXml);
-    if (coverPath) {
-      resolve(spineItemBasePath + coverPath);
-    } else {
-      getCoverFilePathFromSpineItem(opf, basePath, zip, idrefs, resolve, reject);
-    }
-  });
-}
-
-async function getProtectedFiles(zip) {
-  try {
-    const xmlData = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT);
-    const encryptionFile = parseXml(xmlData);
-
-    return extractEncryptionsData(encryptionFile);
-  } catch (error) {
-    return {};
-  }
 }
 
 function getFetchModeFromMimeType(mimeType) {

@@ -2,23 +2,21 @@ import {all} from 'rsvp';
 import {
   convertUtf16Data,
   EMPTY_ELEMENTS_COUNT,
-  enrichTocItems, extractEncryptionsData, fetchAsArrayBuffer,
+  enrichTocItems,
+  extractEncryptionsData,
+  fetchAsArrayBuffer,
   getSpineElementsCountInDom,
   isEmpty,
   parseXml
 } from './utils';
 import Epub from './Epub';
 import Lcp, {PROTECTION_METHODS} from './Lcp';
-import {ARRAYBUFFER_FORMAT, getFile, STRING_FORMAT} from "./utils/zipTools";
 
 class WebEpub extends Epub {
 
-  constructor(url, license, keys) {
+  constructor(url) {
     super();
-
     this._url = url;
-    this._license = license;
-    this._keys = keys;
   }
 
   /**
@@ -47,24 +45,26 @@ class WebEpub extends Epub {
    * @return {Promise} A promise that resolves with an array of each spine character count
    */
   async getSpine() {
-    const manifest = await this.manifest();
-    const items = manifest['readingOrder'];
+    if (!this._spine) {
+      const manifest = await this.manifest();
+      const items = manifest['readingOrder'];
 
-    const protectedFiles = await getProtectedFiles(this._url);
-    items.forEach((item, index) => {
-      item.cfi = `/6/${2 + index * 2}`;
-      item.path = makeAbsolutePath(item.href);
-      item.protection = protectedFiles[item.path];
-    });
+      const protectedFiles = await getProtectedFiles(this._url);
+      items.forEach((item, index) => {
+        item.cfi = `/6/${2 + index * 2}`;
+        item.path = makeAbsolutePath(item.href);
+        item.protection = protectedFiles[item.path];
+      });
 
-    if (!isEpubFixedLayout(manifest.metadata)) {
-      const license = await this.getLicense();
-      const toc = await this.getToc();
-      const userKey = await Lcp.getValidUserKey(license, this._keys);
-      return all(items.map(spine => analyzeSpineItem(spine, this._url, license, userKey, toc)), 'spines');
+      if (!isEpubFixedLayout(manifest.metadata)) {
+        const toc = await this.getToc();
+        this._spine = await all(items.map(spine => analyzeSpineItem(spine, this._url, toc)), 'spines');
+      } else {
+        this._spine = items;
+      }
     }
 
-    return items;
+    return this._spine;
   }
 
   /**
@@ -73,10 +73,12 @@ class WebEpub extends Epub {
    * @returns {Promise<Array>}
    */
   async getToc() {
-    const manifest = await this.manifest();
-    const tocItems = manifest['toc'];
-    setPositions(tocItems, 1, 0);
-    return tocItems;
+    if (!this._toc) {
+      const manifest = await this.manifest();
+      const tocItems = manifest['toc'];
+      this._toc = setPositions(tocItems, 1, 0);
+    }
+    return this._toc;
   }
 
   /**
@@ -104,6 +106,29 @@ class WebEpub extends Epub {
 
   /**
    *
+   * @returns {{totalCount, maxLevel, elements}}
+   */
+  async getPagination() {
+    if (await this.isFixedLayout()) {
+      return null;
+    }
+    if (!this._pagination) {
+      this._pagination = await generatePagination(await this.getToc(), await this.getSpine());
+    }
+    return this._pagination;
+  }
+
+  /**
+   *
+   * @returns {Promise<boolean>}
+   */
+  async isFixedLayout() {
+    const metadata = await this.getMetadata();
+    return isEpubFixedLayout(metadata);
+  }
+
+  /**
+   *
    * @return {Promise} A promise that resolves with the relative path of the cover file
    */
   async coverPath() {
@@ -113,10 +138,6 @@ class WebEpub extends Epub {
       coverResource = getCoverPathFromResources(manifest['resources']);
     }
     return coverResource;
-  }
-
-  pagination(tocItems, spines) {
-    return generatePagination(tocItems, spines);
   }
 }
 
@@ -141,17 +162,17 @@ function makeAbsolutePath(path) {
   return `/${path}`;
 }
 
-function analyzeSpineItem(spineItem, baseUri, license, key, toc) {
-  return getFileContent(baseUri, spineItem.path, spineItem.protection, license, key)
-    .then(parseXml)
-    .then(domContent => getSpineElementsCountInDom(domContent)
-      .then(elementsCount => Object.assign(spineItem, elementsCount))
-      .then(spine => enrichTocItems(toc, spine, domContent))
-    )
-    .catch(() => {
-      console.warn(`Can’t analyze spine item ${spineItem.path}`);
-      return Object.assign(spineItem, EMPTY_ELEMENTS_COUNT);
-    });
+async function analyzeSpineItem(spineItem, baseUri, toc) {
+  try {
+    const domContent = parseXml(await getFileContent(baseUri, spineItem.path));
+    const elementsCount = await getSpineElementsCountInDom(domContent);
+    const analyzedSpineItem = Object.assign(spineItem, elementsCount);
+    enrichTocItems(toc, analyzedSpineItem, domContent);
+    return analyzedSpineItem;
+  } catch(error) {
+    console.warn(`Can’t analyze spine item ${spineItem.path}`);
+    return Object.assign(spineItem, EMPTY_ELEMENTS_COUNT);
+  }
 }
 
 function setPositions(items, level, endpoints) {
@@ -231,29 +252,16 @@ async function getProtectedFiles(baseUrl) {
   }
 }
 
-async function getFileContent(baseUrl, path, protection = null, license = null, key = null) {
+async function getFileContent(baseUrl, path) {
   const fileUrl = `${baseUrl}${path}`;
 
   try {
-    if (isEmpty(protection)) {
-      const response = await fetch(fileUrl);
-      if (!response.ok) {
-        return '';
-      }
-
-      return response.text();
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      return '';
     }
 
-    let fileContent = await fetchAsArrayBuffer(fileUrl);
-    if (protection.type === PROTECTION_METHODS.LCP) {
-      fileContent = await Lcp.decipherTextFile(fileContent, protection, license, key);
-
-      if (/html/.test(path)) {
-        fileContent = convertUtf16Data(fileContent);
-      }
-    }
-
-    return fileContent;
+    return response.text();
   } catch (error) {
     console.warn(`Can’t extract content of file at ${path}`, error);
     return '';

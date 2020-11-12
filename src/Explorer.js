@@ -1,14 +1,12 @@
 import {all, Promise} from 'rsvp';
-import {isEpubFixedLayout, isEmpty} from './utils';
+import {parseXml} from './utils';
 import ZipEpub from './ZipEpub';
 import WebEpub from './WebEpub';
 import Lcp from './Lcp';
 import JSZip from 'jszip';
-import cheerio from 'cheerio';
-import {getLcpLicense} from "./utils/zipTools";
+import {getCoverPath, getFile, getLcpLicense, getProtectedFiles, STRING_FORMAT} from './utils/zipTools';
 
 const UTF8 = 'utf-8';
-
 
 const BYTES_FORMAT = 'uint8array';
 
@@ -33,7 +31,7 @@ class Explorer {
    * @param keys
    * @returns {Promise<ZipEpub>}
    */
-  async loadFromBinary(data, license = null, keys = []) {
+  static async loadFromBinary(data, license = null, keys = []) {
     const zip = await JSZip.loadAsync(data);
     return new ZipEpub(zip, license, keys);
   }
@@ -44,7 +42,7 @@ class Explorer {
    * @param keys
    * @returns {Promise<ZipEpub>}
    */
-  async loadFromBase64(data, license = null, keys = []) {
+  static async loadFromBase64(data, license = null, keys = []) {
     const zip = await JSZip.loadAsync(data, {base64: true});
     return new ZipEpub(zip, license, keys);
   }
@@ -55,7 +53,7 @@ class Explorer {
    * @param keys
    * @returns {Promise<WebEpub>}
    */
-  async loadFromWebPubUrl(url, license = null, keys = []) {
+  static async loadFromWebPubUrl(url, license = null, keys = []) {
     if (url[url.length - 1] === '/') {
       url = url.substr(0, url.length - 1);
     }
@@ -65,10 +63,10 @@ class Explorer {
   /**
    * Extracts cover image raw data from epub data
    *
-   * @param {UInt8Array} epubData
+   * @param epubData
    * @return {Promise} A promise that resolves with the image data
    */
-  cover(epubData) {
+  static cover(epubData) {
     return getZipFromData(epubData).then(getCoverData);
   }
 
@@ -78,7 +76,7 @@ class Explorer {
    * @param epubData: epub binary data
    * @return {Promise} A promise that resolves with the parsed LCP license
    */
-  async lcpLicense(epubData) {
+  static async lcpLicense(epubData) {
     const zip = await getZipFromData(epubData);
     return getLcpLicense(zip);
   }
@@ -86,19 +84,19 @@ class Explorer {
   /**
    * Extracts protections from epub
    *
-   * @param {UInt8Array} epubData: epub binary data
+   * @param epubData: epub binary data
    */
-  protections(epubData) {
+  static protections(epubData) {
     return getZipFromData(epubData)
       .then(getProtections);
   }
 
   /**
    *
-   * @param epub
+   * @param epubData
    * @returns {*}
    */
-  isValid(epubData) {
+  static isValid(epubData) {
     return testEpubFileValidity(epubData);
   }
 
@@ -107,7 +105,7 @@ class Explorer {
    * @param epubData
    * @returns {*}
    */
-  isAscmFile(epubData) {
+  static isAscmFile(epubData) {
     return isAscmFile(epubData);
   }
 
@@ -118,7 +116,7 @@ class Explorer {
    * @param userKey
    * @returns {Promise<*>}
    */
-  async decipher(epubData, license, userKey) {
+  static async decipher(epubData, license, userKey) {
     const zip = await getZipFromData(epubData);
     license = license || await getLcpLicense(zip);
     const protectedFileMap = await getProtectedFiles(zip);
@@ -160,7 +158,7 @@ class Explorer {
   }
 }
 
-export default new Explorer();
+export default Explorer;
 
 const base64regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
 
@@ -172,58 +170,9 @@ function getZipFromData(data) {
   return JSZip.loadAsync(data, options);
 }
 
-async function getSpines(zip, license, keys = null, toc = null, shouldAnalyzeSpines = true) {
-  if (isEmpty(license)) {
-    license = await getLcpLicense(zip);
-  }
-
-  // finding spines in .opf
-  const {basePath, opf} = await getOpfContent(zip);
-  const validSpines = [];
-  opf('spine > itemref').each((index, element) => {
-    const spine = cheerio(element);
-    const idref = spine.attr('idref');
-    const item = opf(`manifest > item[id="${idref}"]`);
-    if (isEmpty(item)) {
-      return;
-    }
-    const href = item.attr('href');
-    const validSpine = {
-      idref,
-      href,
-      path: makeAbsolutePath(`${basePath}${href}`)
-    };
-
-    const spineProperties = spine.attr('properties');
-    if (!isEmpty(spineProperties)) {
-      validSpine.spread = spineProperties;
-    }
-
-    validSpines.push(validSpine);
-  });
-
-  const protectedFiles = await getProtectedFiles(zip);
-  for (let spineIndex = 0; spineIndex < validSpines.length; spineIndex++) {
-    const spine = validSpines[spineIndex];
-    spine.cfi = `/6/${2 + spineIndex * 2}`;
-    spine.protection = protectedFiles[spine.path];
-  }
-
-  if (shouldAnalyzeSpines) {
-    const userKey = await Lcp.getValidUserKey(license, keys);
-    const promises = [];
-    validSpines.forEach(spine => promises.push(analyzeSpine.call(this, zip, spine, license, userKey, toc)));
-    return all(promises, 'spines analysis');
-  }
-
-  return validSpines;
-}
-
-
-
-function getCoverData(zip) {
-  return getCoverPath(zip)
-    .then(coverFilePath => getFile(zip, coverFilePath, BYTES_FORMAT));
+async function getCoverData(zip) {
+  const coverFilePath = await getCoverPath(zip);
+  return getFile(zip, coverFilePath, BYTES_FORMAT);
 }
 
 async function getProtections(zip) {
@@ -252,47 +201,6 @@ async function getProtections(zip) {
   } catch (error) {
     console.warn(error);
     return [];
-  }
-}
-
-async function getProtectedFiles(zip) {
-  let xmlFile;
-  try {
-    xmlFile = await getFile(zip, 'META-INF/encryption.xml', STRING_FORMAT);
-  } catch (error) {
-    return {};
-  }
-
-  try {
-    xmlFile = parseXml(xmlFile);
-    const resources = {};
-    xmlFile('EncryptedData').each((index, element) => {
-      const uri = xmlFile('CipherData > CipherReference', element).attr('URI');
-      const algorithm = xmlFile('EncryptionMethod', element).attr('Algorithm');
-      const compression = xmlFile('Compression', element);
-
-      let type = PROTECTION_METHOD.UNKNOWN;
-      const retrievalMethod = xmlFile('KeyInfo > RetrievalMethod', element);
-      if (retrievalMethod.length > 0) {
-        type = retrievalMethod.attr('Type');
-      }
-      const keyInfo = xmlFile('KeyInfo > resource', element);
-      if (keyInfo.length > 0) {
-        type = keyInfo.attr('xmlns');
-      }
-
-      resources[makeAbsolutePath(decodeURIComponent(uri))] = {
-        algorithm,
-        compressionMethod: compression ? parseInt(compression.attr('Method'), 10) : 0,
-        originalLength: compression ? parseInt(compression.attr('OriginalLength'), 10) : 0,
-        type
-      };
-    });
-
-    return resources;
-  } catch (error) {
-    console.warn(error);
-    throw error;
   }
 }
 

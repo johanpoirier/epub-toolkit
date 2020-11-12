@@ -4,10 +4,11 @@ export default class Epub {
   }
 
   async analyze() {
+    const spine = await this.spine();
     return {
       license: await this.license(),
       metadata: await this.metadata(),
-      spine: await this.spine(),
+      spine,
       toc: await this.toc()
     };
   }
@@ -21,11 +22,19 @@ export default class Epub {
   }
 
   async toc() {
-    return this.getSpine();
+    return this.getToc();
   }
 
   async license() {
     return this.getLicense();
+  }
+
+  async pagination() {
+    return this.getPagination();
+  }
+
+  async isFixedLayout() {
+    return false;
   }
 
   async getMetadata() {
@@ -41,6 +50,10 @@ export default class Epub {
   }
 
   async getLicense() {
+    return null;
+  }
+
+  async getPagination() {
     return null;
   }
 }
