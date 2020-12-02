@@ -1,18 +1,15 @@
 import {all} from 'rsvp';
 import {
-  convertUtf16Data,
   EMPTY_ELEMENTS_COUNT,
   enrichTocItems,
   extractEncryptionsData,
-  fetchAsArrayBuffer,
   getSpineElementsCountInDom,
   isEmpty,
   parseXml
 } from './utils';
-import Epub from './Epub';
-import Lcp, {PROTECTION_METHODS} from './Lcp';
+import Ebook from './Ebook';
 
-class WebEpub extends Epub {
+class WebEpub extends Ebook {
 
   constructor(url) {
     super();

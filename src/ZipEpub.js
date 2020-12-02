@@ -5,8 +5,7 @@ import {
   isEmpty,
   parseXml,
   makeAbsolutePath,
-  generatePagination,
-  extractEncryptionsData
+  generatePagination
 } from './utils';
 import {
   analyzeSpineItem,
@@ -15,15 +14,13 @@ import {
   getLcpLicense,
   getOpfContent,
   getProtectedFiles,
-  STRING_FORMAT
+  getZipFileData
 } from './utils/zipTools';
 import mime from 'mime-types';
-import Epub from './Epub';
+import Ebook from './Ebook';
 import parseToc from './TocParser';
 
-const forge = require('../vendor/forge.toolkit');
-
-class ZipEpub extends Epub {
+class ZipEpub extends Ebook {
 
   constructor(zip, license, keys) {
     super();
@@ -168,44 +165,16 @@ class ZipEpub extends Epub {
     }
 
     const contentType = mime.contentType(path.split('/').pop());
+    const userKey = await Lcp.getValidUserKey(this._license, this._keys);
 
     return {
-      data: await getZipFileData(zipFile, contentType, await this.getFileProtection(path), this.license, this.userKey, await this.getUid()),
+      data: await getZipFileData(zipFile, contentType, await this.getFileProtection(path), this.license, userKey),
       contentType
     };
   }
 }
 
 export default ZipEpub;
-
-const ENCRYPTION_METHODS = {
-  IDPF: 'http://www.idpf.org/2008/embedding',
-  ADOBE: 'http://ns.adobe.com/pdf/enc#RC',
-  LCP: 'http://www.w3.org/2001/04/xmlenc#aes256-cbc'
-};
-
-async function getZipFileData(zipFile, contentType, protection, license, userKey, uid) {
-  const fetchMode = getFetchModeFromMimeType(contentType);
-  if (!protection) {
-    return zipFile.async(fetchMode);
-  }
-  switch (protection.algorithm) {
-    case ENCRYPTION_METHODS.LCP:
-      const decodedData = await Lcp.decipherFile(fetchMode, await zipFile.async('arraybuffer'), protection, license, userKey);
-      if (fetchMode === 'text') {
-        return fixDecodedTextData(decodedData, contentType);
-      }
-      return decodedData;
-
-    case ENCRYPTION_METHODS.IDPF:
-      // not implemented yet
-      return zipFile.async(fetchMode);
-
-    case ENCRYPTION_METHODS.ADOBE:
-      // not implemented yet
-      return zipFile.async(fetchMode);
-  }
-}
 
 function getMetadata(zip) {
   return getOpfContent(zip)
@@ -223,47 +192,6 @@ function getMetadata(zip) {
       });
       return fixedMetadata;
     });
-}
-
-function getFetchModeFromMimeType(mimeType) {
-  if (mimeType.indexOf('image') !== -1) {
-    return 'nodebuffer';
-  }
-  if (mimeType.indexOf('video') !== -1) {
-    return 'nodebuffer';
-  }
-  if (mimeType.indexOf('font') !== -1) {
-    return 'nodebuffer';
-  }
-  return 'text';
-}
-
-function fixDecodedTextData(decryptedBinaryData, mimeType) {
-  if (typeof decryptedBinaryData !== 'string') {
-    return decryptedBinaryData;
-  }
-
-  // BOM removal
-  if (decryptedBinaryData.charCodeAt(0) === 0xFEFF) {
-    decryptedBinaryData = decryptedBinaryData.substr(1);
-  }
-  let data = decryptedBinaryData.replace(/^ï»¿/, '');
-
-  // convert UTF-8 decoded data to UTF-16 javascript string
-  if (/html/.test(mimeType)) {
-    try {
-      data = forge.util.decodeUtf8(data);
-
-      // trimming bad data at the end the spine
-      var lastClosingTagIndex = data.lastIndexOf('>');
-      if (lastClosingTagIndex > 0) {
-        data = data.substring(0, lastClosingTagIndex + 1);
-      }
-    } catch (err) {
-      console.warn('Can’t decode utf8 content', err);
-    }
-  }
-  return data;
 }
 
 function extractMetadataEntry(entry) {

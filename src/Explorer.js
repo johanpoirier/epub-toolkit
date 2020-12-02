@@ -1,6 +1,7 @@
 import {all, Promise} from 'rsvp';
 import {parseXml} from './utils';
 import ZipEpub from './ZipEpub';
+import ZipPdf from './ZipPdf';
 import WebEpub from './WebEpub';
 import Lcp from './Lcp';
 import JSZip from 'jszip';
@@ -34,6 +35,17 @@ class Explorer {
   static async loadFromBinary(data, license = null, keys = []) {
     const zip = await JSZip.loadAsync(data);
     return new ZipEpub(zip, license, keys);
+  }
+
+  /**
+   * @param data
+   * @param license
+   * @param keys
+   * @returns {Promise<ZipPdf>}
+   */
+  static async loadFromBinaryPdf(data, license, keys) {
+    const zip = await JSZip.loadAsync(data);
+    return new ZipPdf(zip, license, keys);
   }
 
   /**

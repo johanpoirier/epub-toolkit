@@ -1,4 +1,4 @@
-export default class Epub {
+export default class Ebook {
   setKeys(keys) {
     this._keys = keys;
   }
