@@ -2,10 +2,11 @@
   "name": "epub-toolkit",
   "version": "0.1.0",
   "description": "JS modules to explore epub files",
-  "main": "lib/epub-toolkit.js",
+  "main": "lib/index.js",
+  "module": "src/index.js",
   "scripts": {
-    "build": "webpack",
-    "prepublish": "npm run build"
+    "build": "rollup -c",
+    "prepare": "npm run build"
   },
   "keywords": [
     "epub",
@@ -16,20 +17,21 @@
   "license": "MIT",
   "dependencies": {
     "@babel/runtime-corejs3": "^7.9.2",
-    "cheerio": "^1.0.0-rc.2",
     "core-js": "^3.6.5",
     "jszip": "^3.1.5",
-    "mime-types": "^2.1.27",
+    "mime": "^2.4.7",
     "pako": "^1.0.11",
-    "rsvp": "^4.8.2"
+    "react-native-cheerio": "^1.0.0-rc.4"
   },
   "devDependencies": {
     "@babel/cli": "^7.8.4",
     "@babel/core": "^7.9.0",
     "@babel/plugin-transform-runtime": "^7.9.0",
-    "@babel/preset-env": "^7.9.5",
-    "babel-loader": "^8.1.0",
-    "webpack": "^4.42.1",
-    "webpack-cli": "^3.3.12"
+    "@babel/preset-env": "^7.12.11",
+    "@rollup/plugin-babel": "^5.2.2",
+    "@rollup/plugin-commonjs": "^17.0.0",
+    "@rollup/plugin-json": "^4.1.0",
+    "@rollup/plugin-node-resolve": "^11.0.1",
+    "rollup": "^2.35.1"
   }
 }

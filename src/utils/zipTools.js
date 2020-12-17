@@ -1,5 +1,4 @@
 import {FileNotFoundError} from '../errors';
-import {hash} from 'rsvp';
 import {
   convertUtf16Data, EMPTY_ELEMENTS_COUNT, enrichTocItems, extractEncryptionsData,
   getBasePath, getDirPath,
@@ -10,9 +9,8 @@ import {
   parseXml
 } from './index';
 import Lcp, {PROTECTION_METHODS} from '../Lcp';
-import cheerio from 'cheerio';
-
-const forge = require('../../vendor/forge.toolkit');
+import cheerio from 'react-native-cheerio';
+import forge from '../../vendor/forge.min';
 
 export const BYTES_FORMAT = 'uint8array';
 export const STRING_FORMAT = 'string';
@@ -214,12 +212,10 @@ export function getOpfContent(zip) {
       basePath = getBasePath(opfFilePath);
       return getFile(zip, opfFilePath);
     })
-    .then(opfXml => {
-      return hash({
-        basePath: basePath,
-        opf: parseXml(opfXml.trim())
-      });
-    });
+    .then(opfXml => ({
+      basePath,
+      opf: parseXml(opfXml.trim())
+    }));
 }
 
 export function analyzeSpineItem(zip, spine, license, userKey, toc) {

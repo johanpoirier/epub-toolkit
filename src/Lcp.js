@@ -1,5 +1,5 @@
 import pako from 'pako';
-const forge = require('../vendor/forge.toolkit');
+import forge from '../vendor/forge.min';
 import {isEmpty} from './utils';
 
 const IV_BYTES_SIZE = 16;

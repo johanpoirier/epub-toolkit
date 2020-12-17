@@ -1,5 +1,4 @@
-import cheerio from 'cheerio';
-import {all} from 'rsvp';
+import cheerio from 'react-native-cheerio';
 import Lcp from './Lcp';
 import {
   isEmpty,
@@ -16,7 +15,7 @@ import {
   getProtectedFiles,
   getZipFileData
 } from './utils/zipTools';
-import mime from 'mime-types';
+import mime from 'mime';
 import Ebook from './Ebook';
 import parseToc from './TocParser';
 
@@ -85,7 +84,7 @@ class ZipEpub extends Ebook {
 
     if (!isEpubFixedLayout((await this.getMetadata()))) {
       const userKey = await Lcp.getValidUserKey(license, this._keys);
-      this._spine = await all(validSpineItems.map(spine => analyzeSpineItem.call(this, this._zip, spine, license, userKey, toc)), 'spine analysis');
+      this._spine = await Promise.all(validSpineItems.map(spine => analyzeSpineItem.call(this, this._zip, spine, license, userKey, toc)));
     } else {
       this._spine = validSpineItems;
     }
@@ -164,7 +163,7 @@ class ZipEpub extends Ebook {
       return;
     }
 
-    const contentType = mime.contentType(path.split('/').pop());
+    const contentType = mime.getType(path.split('/').pop());
     const userKey = await Lcp.getValidUserKey(this._license, this._keys);
 
     return {

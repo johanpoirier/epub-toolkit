@@ -1,10 +1,9 @@
-import {all, Promise} from 'rsvp';
 import {parseXml} from './utils';
 import ZipEpub from './ZipEpub';
 import ZipPdf from './ZipPdf';
 import WebEpub from './WebEpub';
 import Lcp from './Lcp';
-import JSZip from 'jszip';
+import JSZip from 'jszip/dist/jszip';
 import {getCoverPath, getFile, getLcpLicense, getProtectedFiles, STRING_FORMAT} from './utils/zipTools';
 
 const UTF8 = 'utf-8';
@@ -152,10 +151,10 @@ class Explorer {
         data: await zip.file(filePath).async(BYTES_FORMAT)
       };
     });
-    const epubFiles = await all(promises, 'decipher-files');
+    const epubFiles = await Promise.all(promises);
 
     const newZip = new JSZip();
-    await all(epubFiles.map(file => {
+    await Promise.all(epubFiles.map(file => {
       if (!file) {
         return;
       }
@@ -164,7 +163,7 @@ class Explorer {
       }
       console.info('adding to zip', file.path);
       return newZip.file(file.path, file.data);
-    }), 'add-files-to-zip');
+    }));
 
     return newZip.generateAsync({type: 'arraybuffer'});
   }

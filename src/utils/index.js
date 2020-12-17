@@ -1,8 +1,7 @@
-import {all} from "rsvp";
-import EpubCFI from "../cfi/epubcfi";
+import EpubCFI from '../cfi/epubcfi';
 
-const cheerio = require('cheerio');
-const forge = require('../../vendor/forge.toolkit');
+import cheerio from 'react-native-cheerio';
+import forge from '../../vendor/forge.min';
 
 const UTF8 = 'utf-8';
 const UTF16BE = 'utf-16be';
@@ -101,7 +100,7 @@ export function makeAbsolutePath(path) {
 }
 
 export function getSpineElementsCountInDom(domContent) {
-  return all([getCharacterCountInDom(domContent), getImageCountInDom(domContent), getVideoCountInDom(domContent)], 'spine analysis')
+  return Promise.all([getCharacterCountInDom(domContent), getImageCountInDom(domContent), getVideoCountInDom(domContent)])
     .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
     .then(estimateTotalCount)
     .catch(error => {
@@ -111,7 +110,7 @@ export function getSpineElementsCountInDom(domContent) {
 }
 
 function getElementsCount(elements) {
-  return all([getCharacterCount(elements), getImageCount(elements), getVideoCount(elements)], 'elements count')
+  return Promise.all([getCharacterCount(elements), getImageCount(elements), getVideoCount(elements)])
     .then(([characterCount, imageCount, videoCount]) => ({characterCount, imageCount, videoCount}))
     .then(estimateTotalCount)
     .catch(error => {

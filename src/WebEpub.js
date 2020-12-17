@@ -1,4 +1,3 @@
-import {all} from 'rsvp';
 import {
   EMPTY_ELEMENTS_COUNT,
   enrichTocItems,
@@ -55,7 +54,7 @@ class WebEpub extends Ebook {
 
       if (!isEpubFixedLayout(manifest.metadata)) {
         const toc = await this.getToc();
-        this._spine = await all(items.map(spine => analyzeSpineItem(spine, this._url, toc)), 'spines');
+        this._spine = await Promise.all(items.map(spine => analyzeSpineItem(spine, this._url, toc)));
       } else {
         this._spine = items;
       }
