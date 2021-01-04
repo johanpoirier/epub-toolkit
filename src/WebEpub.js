@@ -72,7 +72,8 @@ class WebEpub extends Ebook {
     if (!this._toc) {
       const manifest = await this.manifest();
       const tocItems = manifest['toc'];
-      this._toc = setPositions(tocItems, 1, 0);
+      transformTocItems(tocItems, 1, 0);
+      this._toc = tocItems;
     }
     return this._toc;
   }
@@ -171,17 +172,22 @@ async function analyzeSpineItem(spineItem, baseUri, toc) {
   }
 }
 
-function setPositions(items, level, endpoints) {
+function transformTocItems(items, level, endpoints) {
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i];
+    item.label = item.title;
     item.level = level;
-    item.endPoint = (!item.children || item.children.length === 0);
+    item.items = item.children;
+    item.endPoint = (!item.items || item.items.length === 0);
     if (item.endPoint) {
       endpoints += 1;
       item.position = endpoints;
     } else {
-      endpoints = setPositions(item.children, level + 1, endpoints);
+      endpoints = transformTocItems(item.items, level + 1, endpoints);
     }
+    delete item.title;
+    delete item.templated;
+    delete item.children;
   }
   return endpoints;
 }
