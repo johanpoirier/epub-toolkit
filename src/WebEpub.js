@@ -2,8 +2,8 @@ import {
   EMPTY_ELEMENTS_COUNT,
   enrichTocItems,
   extractEncryptionsData,
+  generatePagination,
   getSpineElementsCountInDom,
-  isEmpty,
   parseXml
 } from './utils';
 import Ebook from './Ebook';
@@ -43,24 +43,29 @@ class WebEpub extends Ebook {
    */
   async getSpine() {
     if (!this._spine) {
-      const manifest = await this.manifest();
-      const items = manifest['readingOrder'];
+      try {
+        const manifest = await this.manifest();
+        const items = manifest['readingOrder'];
 
-      const protectedFiles = await getProtectedFiles(this._url);
-      items.forEach((item, index) => {
-        item.cfi = `/6/${2 + index * 2}`;
-        item.path = makeAbsolutePath(item.href);
-        item.protection = protectedFiles[item.path];
-      });
+        const protectedFiles = await getProtectedFiles(this._url);
+        items.forEach((item, index) => {
+          item.cfi = `/6/${2 + index * 2}`;
+          item.path = makeAbsolutePath(item.href);
+          item.protection = protectedFiles[item.path];
+        });
 
-      if (!isEpubFixedLayout(manifest.metadata)) {
-        const toc = await this.getToc();
-        this._spine = await Promise.series(items.map(spine => async () => {
-          await nextFrame();
-          return analyzeSpineItem(spine, this._url, toc);
-        }));
-      } else {
-        this._spine = items;
+        if (!isEpubFixedLayout(manifest.metadata)) {
+          const toc = await this.getToc();
+          this._spine = await Promise.series(items.map(spine => async () => {
+            await nextFrame();
+            return analyzeSpineItem(spine, this._url, toc);
+          }));
+        } else {
+          this._spine = items;
+        }
+      } catch(error) {
+        console.warn('Error generating spine', error);
+        this._spine = [];
       }
     }
 
@@ -74,10 +79,15 @@ class WebEpub extends Ebook {
    */
   async getToc() {
     if (!this._toc) {
-      const manifest = await this.manifest();
-      const tocItems = manifest['toc'];
-      transformTocItems(tocItems, 1, 0);
-      this._toc = tocItems;
+      try {
+        const manifest = await this.manifest();
+        const tocItems = manifest['toc'];
+        transformTocItems(tocItems, 1, 0);
+        this._toc = tocItems;
+      } catch(error) {
+        console.warn('Error generating toc', error);
+        this._toc = [];
+      }
     }
     return this._toc;
   }
@@ -110,11 +120,20 @@ class WebEpub extends Ebook {
    * @returns {{totalCount, maxLevel, elements}}
    */
   async getPagination() {
-    if (await this.isFixedLayout()) {
-      return null;
-    }
-    if (!this._pagination) {
-      this._pagination = await generatePagination(await this.getToc(), await this.getSpine());
+    try {
+      if (await this.isFixedLayout()) {
+        return null;
+      }
+      if (!this._pagination) {
+          this._pagination = await generatePagination(await this.getToc(), await this.getSpine());
+      }
+    } catch(error) {
+      console.warn('Error generating pagination', error);
+      this._pagination = {
+        totalCount: 0,
+        maxLevel: 1,
+        elements: []
+      };
     }
     return this._pagination;
   }
@@ -194,43 +213,6 @@ function transformTocItems(items, level, endpoints) {
     delete item.children;
   }
   return endpoints;
-}
-
-function generatePagination(tocItems, spines) {
-  const totalCount = spines.reduce((total, spine) => total + spine.totalCount, 0);
-
-  const elements = [];
-  let spineIndex = 0, combinedSize = 0, maxLevel = 1;
-
-  while (spineIndex < spines.length) {
-    const spine = spines[spineIndex];
-    const items = findTocItemsInSpine(tocItems, spine.href);
-    maxLevel = items.reduce((max, item) => item.level > max ? item.level : max, maxLevel);
-
-    let title;
-    if (isEmpty(items)) {
-      title = isEmpty(elements) ? spine.href.split('.')[0] : elements[spineIndex - 1].title;
-    } else {
-      title = items[0].title;
-    }
-
-    const element = {
-      items,
-      title: title.trim(),
-      percentageOfBook: 100 * spine.totalCount / totalCount,
-      positionInBook: combinedSize
-    };
-    elements.push(element);
-
-    combinedSize += element.percentageOfBook;
-    spineIndex++;
-  }
-
-  return {
-    totalCount,
-    maxLevel,
-    elements
-  }
 }
 
 function findTocItemsInSpine(items, href) {
