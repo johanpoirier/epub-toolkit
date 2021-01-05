@@ -8,6 +8,7 @@ export default class Ebook {
     return {
       license: await this.license(),
       metadata: await this.metadata(),
+      pagination: await this.pagination(),
       spine,
       toc: await this.toc()
     };
