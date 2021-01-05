@@ -7,6 +7,7 @@ import {
   parseXml
 } from './utils';
 import Ebook from './Ebook';
+import nextFrame from 'next-frame';
 
 class WebEpub extends Ebook {
 
@@ -54,7 +55,10 @@ class WebEpub extends Ebook {
 
       if (!isEpubFixedLayout(manifest.metadata)) {
         const toc = await this.getToc();
-        this._spine = await Promise.all(items.map(spine => analyzeSpineItem(spine, this._url, toc)));
+        this._spine = await Promise.series(items.map(spine => async () => {
+          await nextFrame();
+          return analyzeSpineItem(spine, this._url, toc);
+        }));
       } else {
         this._spine = items;
       }
