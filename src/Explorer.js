@@ -1,5 +1,5 @@
 import {all, Promise} from 'rsvp';
-import {parseXml} from './utils';
+import {makeAbsolutePath, parseXml} from './utils';
 import ZipEpub from './ZipEpub';
 import ZipPdf from './ZipPdf';
 import WebEpub from './WebEpub';
@@ -134,13 +134,13 @@ class Explorer {
     const protectedFileMap = await getProtectedFiles(zip);
 
     const promises = Object.keys(zip.files).map(async filePath => {
-      const protection = protectedFileMap[filePath];
+      const protection = protectedFileMap[makeAbsolutePath(filePath)];
       if (protection && protection.type === LCP_PROTECTION_TYPE) {
         try {
           const data = await getFile(zip, filePath, BYTES_FORMAT);
           return {
             path: filePath,
-            data: await Lcp.decipherFile(data, protectedFileMap[filePath], license, userKey)
+            data: await Lcp.decipherFile('arraybuffer', data, protection, license, userKey)
           }
         } catch (error) {
           console.warn(`${filePath} was not deciphered`, error);
@@ -166,7 +166,7 @@ class Explorer {
       return newZip.file(file.path, file.data);
     }), 'add-files-to-zip');
 
-    return newZip.generateAsync({type: 'arraybuffer'});
+    return newZip.generateAsync({type: 'nodebuffer'});
   }
 }
 
